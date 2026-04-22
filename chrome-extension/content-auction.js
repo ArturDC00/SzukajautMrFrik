@@ -28,7 +28,11 @@
       return path.includes('/vehicledetail/');
     }
     if (sourceConfig.id === 'COPART_US' || sourceConfig.id === 'COPART_CA') {
-      return /\/lot\/\d/.test(path);
+      const hash = (location.hash || '').toLowerCase();
+      // SPA / locale: czasem numer lotu tylko w hash; ścieżka musi zawierać /lot/ + cyfry
+      if (/\/lot\/\d/.test(path) || /\/lot\/\d/.test(hash)) return true;
+      if (path.includes('/lot/') && /\d/.test(path.split('/lot/')[1] || '')) return true;
+      return false;
     }
     if (sourceConfig.id === 'PROGI_CA') {
       if (path.includes('/search') || path === '/' || /\/(login|signin)/.test(path)) return false;

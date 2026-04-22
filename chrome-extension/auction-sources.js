@@ -171,7 +171,13 @@
     const h = String(hostname).replace(/^www\./, '').toLowerCase();
     if (h === 'ca.iaai.com' || h.endsWith('.ca.iaai.com')) return SOURCES.IAAI_CA;
     if (h.endsWith('copart.ca')) return SOURCES.COPART_CA;
-    if (h === 'autoauction.progi.com' || h.endsWith('.autoauction.progi.com')) {
+    // Progi: produkcyjnie często autoauction.*; czasem samo progi.com / www
+    if (
+      h === 'progi.com' ||
+      h.endsWith('.progi.com') ||
+      h === 'autoauction.progi.com' ||
+      h.endsWith('.autoauction.progi.com')
+    ) {
       return SOURCES.PROGI_CA;
     }
     if (h.includes('iaai.com')) return SOURCES.IAAI_US;

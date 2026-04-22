@@ -348,7 +348,8 @@
 const CFG = {
   // URL scrapera na serwerze (przez nginx proxy)
   // TODO: podmień na publiczny URL scrapera (patrz frik-scraper/)
-  SCRAPER_URL: 'https://TWOJ-HOSTING.example.com/api/frik-scraper',
+  // Ten sam namespace co zakładki; nginx: /mrfrik/api/ → frik-scraper
+  SCRAPER_URL: 'https://135.125.243.231/mrfrik',
   // Ten sam klucz co w .env na serwerze
   SCRAPER_API_KEY: 'tVnlYRFqDxcBvI8MpCKU0XayZ9G4TksbPhguO2JS',
   // Znane pola w encji Oferta

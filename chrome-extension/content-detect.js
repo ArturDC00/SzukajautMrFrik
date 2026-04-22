@@ -1,4 +1,4 @@
-// Runs on klienci.przemek.czarnota.info pages (document_start, all frames).
+// Runs only on /mrfrik/* (zakładki Bitrix) — nie ładuje się na głównej stronie klienta (document_start, all frames).
 // Sets a DOM attribute AND dispatches a CustomEvent so the page can detect
 // that the extension is installed — at any point during page lifecycle.
 

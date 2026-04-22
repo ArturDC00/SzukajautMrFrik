@@ -26,13 +26,13 @@
     "https://*.copart.com/*",
     "https://*.copart.ca/*",
     "https://*.progi.com/*",
-    "https://klienci.przemek.czarnota.info/*",
+    "https://135.125.243.231/mrfrik/*",
     "https://*.bitrix24.pl/*",
     "https://*.bitrix24.com/*"
   ],
   "content_scripts": [
     {
-      "matches": ["https://klienci.przemek.czarnota.info/*"],
+      "matches": ["https://135.125.243.231/mrfrik/*"],
       "js": ["content-detect.js"],
       "run_at": "document_start",
       "all_frames": true

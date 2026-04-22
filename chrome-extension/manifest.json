@@ -26,13 +26,13 @@
     "https://*.copart.com/*",
     "https://*.copart.ca/*",
     "https://*.progi.com/*",
-    "https://135.125.243.231/mrfrik/*",
+    "https://mrfrik.com/mrfrik/*",
     "https://*.bitrix24.pl/*",
     "https://*.bitrix24.com/*"
   ],
   "content_scripts": [
     {
-      "matches": ["https://135.125.243.231/mrfrik/*"],
+      "matches": ["https://mrfrik.com/mrfrik/*"],
       "js": ["content-detect.js"],
       "run_at": "document_start",
       "all_frames": true

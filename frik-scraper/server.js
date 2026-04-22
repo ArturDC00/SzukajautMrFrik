@@ -15,7 +15,7 @@ app.use(express.json({ limit: '1mb' }));
 const ALLOWED = [
   /\.bitrix24\.pl$/,
   /\.bitrix24\.com$/,
-  /^https:\/\/135\.125\.243\.231(?::\d+)?$/,
+  /^https:\/\/(www\.)?mrfrik\.com$/,
 ];
 app.use(cors({
   origin: function (origin, cb) {

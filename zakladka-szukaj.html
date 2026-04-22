@@ -242,11 +242,15 @@ let bxDomain  = null;
 // ── Extension detection — runs IMMEDIATELY, independent of BX24.init ─────
 // (content-detect.js fires at document_start and dispatches 'frik-ext-ping')
 (function initExtDetection() {
-  let resolved = false;
+  // „Wykryto wtyczkę” musi móc nadpisać wcześniejszy wynik z timera (content script czasem >2 s).
+  let extDetected = false;
 
   function setExtStatus(installed) {
-    if (resolved) return;
-    resolved = true;
+    if (installed) {
+      extDetected = true;
+    } else if (extDetected) {
+      return;
+    }
 
     const bar        = document.getElementById('extBar');
     const dot        = document.getElementById('extDot');
@@ -280,10 +284,10 @@ let bxDomain  = null;
     setExtStatus(true);
   }, { once: true });
 
-  // 3. Fallback: after 2 s with no signal → assume not installed
+  // 3. Fallback: po dłuższym czasie bez sygnału → brak wtyczki (MV3 bywa wolny w iframe)
   setTimeout(function () {
     setExtStatus(false);
-  }, 2000);
+  }, 5000);
 })();
 
 // ── Bitrix24 init ─────────────────────────────────────────────────
@@ -321,6 +325,13 @@ BX24.init(function () {
         titleEl.classList.remove('loading');
       }
     });
+
+    // Od razu informuj wtyczkę (popup / storage) — wcześniej było tylko przy kliknięciu aukcji
+    document.documentElement.setAttribute('data-frik-domain', bxDomain || 'mrfrik.bitrix24.pl');
+    document.documentElement.setAttribute('data-frik-deal-id', String(dealId));
+    window.dispatchEvent(new CustomEvent('frik-set-deal', {
+      detail: { dealId: String(dealId), domain: bxDomain || 'mrfrik.bitrix24.pl' },
+    }));
   } else {
     document.getElementById('dealTitle').textContent = 'Nie rozpoznano deala';
     document.getElementById('dealIdDisplay').textContent = '—';

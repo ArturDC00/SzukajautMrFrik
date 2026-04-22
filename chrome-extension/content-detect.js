@@ -36,24 +36,10 @@ function pingPage() {
   window.dispatchEvent(new CustomEvent('frik-ext-ping', { detail: { v: 1 } }));
 }
 
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', pingPage);
-} else {
-  setTimeout(pingPage, 0);
-}
-
-
-function pingPage() {
-  window.dispatchEvent(new CustomEvent('frik-ext-ping', { detail: { v: 1 } }));
-}
-
-// Fire immediately (document_start — DOM exists but page JS hasn't run yet)
+// document_start — od razu; potem po DOMContentLoaded (strona może zarejestrować listener późno)
 pingPage();
-
-// Fire again after DOMContentLoaded in case page JS registered listener late
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', pingPage);
 } else {
-  // Already past DOMContentLoaded (shouldn't happen at document_start, but safety net)
   setTimeout(pingPage, 0);
 }

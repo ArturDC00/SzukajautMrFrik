@@ -290,53 +290,78 @@ let bxDomain  = null;
   }, 5000);
 })();
 
-// ── Bitrix24 init ─────────────────────────────────────────────────
-BX24.init(function () {
-  const info = BX24.placement.info();
+// ── Bitrix24 init (tylko w iframe CRM — poza Bitrixem BX24 nie istnieje / init rzuca) ──
+(function initBitrixPlacement() {
+  var titleEl = document.getElementById('dealTitle');
+  var idEl    = document.getElementById('dealIdDisplay');
 
-  // Get deal ID from placement options
-  if (info && info.options) {
-    dealId = info.options.ID       || info.options.id       ||
-             info.options.DEAL_ID  || info.options.deal_id  ||
-             info.options.ELEMENT_ID || info.options.element_id;
+  if (typeof BX24 === 'undefined' || !BX24 || typeof BX24.init !== 'function') {
+    if (titleEl) {
+      titleEl.textContent = 'Otwórz zakładkę z poziomu deala w Bitrix24 (nie w osobnej karcie). Jeśli jesteś w CRM: sprawdź blokery reklam / sieć — musi załadować się skrypt api.bitrix24.com.';
+      titleEl.classList.remove('loading');
+    }
+    if (idEl) {
+      idEl.textContent = '—';
+      idEl.classList.remove('loading');
+    }
+    return;
   }
 
-  // Get Bitrix24 portal domain from parent frame ancestry
   try {
-    if (window.location.ancestorOrigins && window.location.ancestorOrigins.length > 0) {
-      bxDomain = new URL(window.location.ancestorOrigins[0]).hostname;
-    }
-  } catch (_) {}
+    BX24.init(function () {
+      var info = BX24.placement.info();
 
-  // Enable buttons only if we have deal ID
-  if (dealId) {
-    document.getElementById('dealIdDisplay').textContent = '#' + dealId;
-    document.getElementById('dealIdDisplay').classList.remove('loading');
-    document.querySelectorAll('.search-btn--auction').forEach(function (b) {
-      b.disabled = false;
-    });
+      if (info && info.options) {
+        dealId = info.options.ID       || info.options.id       ||
+                 info.options.DEAL_ID  || info.options.deal_id  ||
+                 info.options.ELEMENT_ID || info.options.element_id;
+      }
 
-    // Load deal title
-    BX24.callMethod('crm.deal.get', { id: dealId }, function (res) {
-      if (!res.error()) {
-        const deal = res.data();
-        const titleEl = document.getElementById('dealTitle');
-        titleEl.textContent = deal.TITLE || ('Deal #' + dealId);
+      try {
+        if (window.location.ancestorOrigins && window.location.ancestorOrigins.length > 0) {
+          bxDomain = new URL(window.location.ancestorOrigins[0]).hostname;
+        }
+      } catch (_) {}
+
+      if (dealId) {
+        idEl.textContent = '#' + dealId;
+        idEl.classList.remove('loading');
+        document.querySelectorAll('.search-btn--auction').forEach(function (b) {
+          b.disabled = false;
+        });
+
+        BX24.callMethod('crm.deal.get', { id: dealId }, function (res) {
+          if (!res.error()) {
+            var deal = res.data();
+            titleEl.textContent = deal.TITLE || ('Deal #' + dealId);
+            titleEl.classList.remove('loading');
+          }
+        });
+
+        document.documentElement.setAttribute('data-frik-domain', bxDomain || 'mrfrik.bitrix24.pl');
+        document.documentElement.setAttribute('data-frik-deal-id', String(dealId));
+        window.dispatchEvent(new CustomEvent('frik-set-deal', {
+          detail: { dealId: String(dealId), domain: bxDomain || 'mrfrik.bitrix24.pl' },
+        }));
+      } else {
+        titleEl.textContent = 'Nie rozpoznano deala';
+        idEl.textContent = '—';
         titleEl.classList.remove('loading');
+        idEl.classList.remove('loading');
       }
     });
-
-    // Od razu informuj wtyczkę (popup / storage) — wcześniej było tylko przy kliknięciu aukcji
-    document.documentElement.setAttribute('data-frik-domain', bxDomain || 'mrfrik.bitrix24.pl');
-    document.documentElement.setAttribute('data-frik-deal-id', String(dealId));
-    window.dispatchEvent(new CustomEvent('frik-set-deal', {
-      detail: { dealId: String(dealId), domain: bxDomain || 'mrfrik.bitrix24.pl' },
-    }));
-  } else {
-    document.getElementById('dealTitle').textContent = 'Nie rozpoznano deala';
-    document.getElementById('dealIdDisplay').textContent = '—';
+  } catch (e) {
+    console.error(e);
+    if (titleEl) {
+      titleEl.textContent = 'Bitrix24: nie udało się uruchomić zakładki w tym oknie. Użyj deala w CRM.';
+      titleEl.classList.remove('loading');
+    }
+    if (idEl) {
+      idEl.textContent = '—';
+      idEl.classList.remove('loading');
+    }
   }
-});
+})();
 
 // ── Open auction site ─────────────────────────────────────────────
 function openAuction(site) {

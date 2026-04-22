@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <title>Generuj ikony — MrFrik</title>
+  <style>
+    body { font-family: sans-serif; padding: 30px; background: #f5f7fa; color: #333; }
+    h2 { margin-bottom: 16px; }
+    .icons { display: flex; gap: 24px; align-items: flex-end; margin-bottom: 20px; flex-wrap: wrap; }
+    .icon-block { text-align: center; }
+    .icon-block canvas { display: block; border: 1px solid #ccc; background: #fff; }
+    .icon-block p { font-size: 11px; margin-top: 4px; color: #666; }
+    .btn { padding: 10px 24px; background: #0b66c2; color: #fff; border: none; border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer; margin-right: 8px; margin-top: 8px; }
+    .btn:hover { background: #0955a8; }
+    .note { background: #fff8e1; border: 1px solid #f0a020; border-radius: 6px; padding: 12px 16px; font-size: 13px; line-height: 1.6; margin-top: 16px; }
+    code { background: #eee; padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+  </style>
+</head>
+<body>
+<h2>🎨 Generator ikon — MrFrik</h2>
+<p>Kliknij "Pobierz wszystkie ikony" i zapisz pliki do folderu <code>chrome-extension/icons/</code></p>
+
+<div class="icons" id="iconsWrap"></div>
+
+<button class="btn" onclick="downloadAll()">⬇ Pobierz wszystkie ikony (3)</button>
+
+<div class="note">
+  <strong>Instrukcja:</strong><br>
+  1. Kliknij "Pobierz wszystkie ikony" — pobrać się 3 pliki PNG<br>
+  2. Przenieś pobrane pliki do folderu <code>chrome-extension/icons/</code><br>
+  3. Sprawdź że folder zawiera: <code>icon16.png</code>, <code>icon48.png</code>, <code>icon128.png</code><br>
+  4. Gotowe — możesz zainstalować rozszerzenie!
+</div>
+
+<script>
+const sizes = [16, 48, 128];
+
+function drawIcon(size) {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+
+  // Background — blue rounded rect
+  const r = size * 0.18;
+  ctx.fillStyle = '#0b66c2';
+  ctx.beginPath();
+  ctx.moveTo(r, 0);
+  ctx.lineTo(size - r, 0);
+  ctx.quadraticCurveTo(size, 0, size, r);
+  ctx.lineTo(size, size - r);
+  ctx.quadraticCurveTo(size, size, size - r, size);
+  ctx.lineTo(r, size);
+  ctx.quadraticCurveTo(0, size, 0, size - r);
+  ctx.lineTo(0, r);
+  ctx.quadraticCurveTo(0, 0, r, 0);
+  ctx.closePath();
+  ctx.fill();
+
+  // Car body (simplified)
+  const s  = size / 16; // scale unit
+  ctx.fillStyle = '#fff';
+
+  // Wheels
+  ctx.beginPath();
+  ctx.arc(4.5 * s, 11.8 * s, 1.6 * s, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(11.5 * s, 11.8 * s, 1.6 * s, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Car body trapezoid
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.moveTo(1.5 * s, 10.5 * s);
+  ctx.lineTo(2.5 * s, 7.5 * s);
+  ctx.lineTo(5   * s, 5.5 * s);
+  ctx.lineTo(11  * s, 5.5 * s);
+  ctx.lineTo(13.5 * s, 7.5 * s);
+  ctx.lineTo(14.5 * s, 10.5 * s);
+  ctx.closePath();
+  ctx.fill();
+
+  // Cabin (slightly narrower, darker area for contrast)
+  ctx.fillStyle = '#0b66c2';
+  ctx.beginPath();
+  ctx.moveTo(5.3 * s, 7.4 * s);
+  ctx.lineTo(6.2 * s, 6.2 * s);
+  ctx.lineTo(9.8 * s, 6.2 * s);
+  ctx.lineTo(10.7 * s, 7.4 * s);
+  ctx.closePath();
+  ctx.fill();
+
+  // Highlight line on top of car
+  ctx.strokeStyle = '#f0a020';
+  ctx.lineWidth = size * 0.06;
+  ctx.beginPath();
+  ctx.moveTo(2.5 * s, 7.5 * s);
+  ctx.lineTo(13.5 * s, 7.5 * s);
+  ctx.stroke();
+
+  return canvas;
+}
+
+// Render previews
+const wrap = document.getElementById('iconsWrap');
+sizes.forEach(size => {
+  const canvas = drawIcon(size);
+  const block  = document.createElement('div');
+  block.className = 'icon-block';
+  block.appendChild(canvas);
+  const lbl = document.createElement('p');
+  lbl.textContent = size + 'x' + size;
+  block.appendChild(lbl);
+  wrap.appendChild(block);
+});
+
+function downloadAll() {
+  sizes.forEach((size, i) => {
+    setTimeout(() => {
+      const canvas = drawIcon(size);
+      canvas.toBlob(blob => {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'icon' + size + '.png';
+        a.click();
+        URL.revokeObjectURL(a.href);
+      }, 'image/png');
+    }, i * 300);
+  });
+}
+</script>
+</body>
+</html>

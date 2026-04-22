@@ -1,0 +1,719 @@
+/* content-auction.js
+ * Strony aukcji (IAAI, Copart, Progi) — deal z URL, panel tworzenia oferty Bitrix24.
+ */
+(function frikAuction() {
+  'use strict';
+
+  // ── Capture deal params from URL (happens once per hard navigation) ──
+  (function captureDealParams() {
+    const p = new URLSearchParams(location.search);
+    const dealId = p.get('bx_deal_id');
+    const domain = p.get('bx_domain');
+    if (dealId) {
+      chrome.storage.local.set({ frik_deal_id: dealId, frik_domain: domain || '' });
+    }
+  })();
+
+  if (typeof FrikAuctionSources === 'undefined') { return; }
+  const HOST   = location.hostname.replace(/^www\./, '');
+  const sourceConfig = FrikAuctionSources.getSourceByHost(HOST);
+  if (!sourceConfig) return;
+  const ACCENT      = sourceConfig.fabColor;
+  const ACCENT_DARK = sourceConfig.accentHover;
+
+  // ── Is this a vehicle detail page? ──────────────────────────────
+  function isDetailPage() {
+    const path = location.pathname.toLowerCase();
+    if (sourceConfig.id === 'IAAI_US' || sourceConfig.id === 'IAAI_CA') {
+      return path.includes('/vehicledetail/');
+    }
+    if (sourceConfig.id === 'COPART_US' || sourceConfig.id === 'COPART_CA') {
+      return /\/lot\/\d/.test(path);
+    }
+    if (sourceConfig.id === 'PROGI_CA') {
+      if (path.includes('/search') || path === '/' || /\/(login|signin)/.test(path)) return false;
+      return /(vehicle|lot|inventory|item|detail|listing|auction|sale)/.test(path) && !path.endsWith('/search');
+    }
+    return false;
+  }
+
+  // ── Extract vehicle data from DOM text ───────────────────────────
+  function labelValFrom(text, label) {
+    const m = text.match(new RegExp(label + '[:\\s]+([^\\n\\r]{1,120})', 'i'));
+    return m ? m[1].trim() : null;
+  }
+
+  function parseOdometer(text) {
+    const odoKmM = text.match(/Odometer[:\s]*([\d,]+)\s*km/i)
+      || (sourceConfig.country === 'CA' ? text.match(/([\d,]+)\s*km/i) : null);
+    const odoMiM = text.match(/Odometer[:\s]*([\d,]+)\s*mi/i)
+      || (sourceConfig.country === 'US'
+        ? (text.match(/Mileage[:\s]*([\d,]+)(?![^\n]*km)/i) || text.match(/Mileage[:\s]*([\d,]+)/i))
+        : text.match(/Mileage[:\s]*([\d,]+)\s*mi/i));
+    let odometerKm = odoKmM ? parseInt(odoKmM[1].replace(/,/g, ''), 10) : null;
+    let odometerMi = odoMiM ? parseInt(odoMiM[1].replace(/,/g, ''), 10) : null;
+    if (odometerKm && !odometerMi) odometerMi = Math.round(odometerKm / 1.609344);
+    if (odometerMi && !odometerKm && odoKmM === null && sourceConfig.country === 'CA') {
+      odometerKm = Math.round(odometerMi * 1.609344);
+    }
+    const odometer = odometerMi;
+    return { odometerKm, odometerMi, odometer };
+  }
+
+  function extractStandard() {
+    const text = document.body ? document.body.innerText : '';
+    const isIAAI = sourceConfig.id === 'IAAI_US' || sourceConfig.id === 'IAAI_CA';
+
+    const vinM = text.match(/\b([A-HJ-NPR-Z0-9]{17})\b/);
+    const vin  = vinM ? vinM[1] : null;
+
+    const titleEl = document.querySelector(
+      'h1, [class*="vehicle-title"], [class*="vdp-title"], [class*="lot-title"], [data-testid*="title"]',
+    );
+    const vehicleTitle = titleEl ? titleEl.textContent.trim().substring(0, 120) : null;
+
+    let year = null, make = null, model = null;
+    if (vehicleTitle) {
+      const m = vehicleTitle.match(/^(\d{4})\s+([A-Za-z\-]+)\s+(.+)/);
+      if (m) {
+        year  = parseInt(m[1], 10);
+        make  = m[2];
+        model = m[3].replace(/\s*[|#].*$/, '').trim();
+      }
+    }
+
+    const lotFromUrl  = location.href.match(
+      isIAAI ? /\/vehicledetail\/(\d+)/i : /\/lot\/(\d+)/i,
+    );
+    const lotFromText = text.match(/\bLot[:\s#]*(\d{5,10})\b/i);
+    const lotNumber   = lotFromUrl ? lotFromUrl[1] : (lotFromText ? lotFromText[1] : null);
+
+    const primaryDamage   = labelValFrom(text, 'Primary Damage')   || labelValFrom(text, 'Primary');
+    const secondaryDamage = labelValFrom(text, 'Secondary Damage') || labelValFrom(text, 'Secondary');
+    const odo = parseOdometer(text);
+    const rdM = text.match(/Run\s*(?:&|and|\/)\s*Drive[:\s]*(Yes|No|[A-Za-z ]{2,25})/i);
+    const runDrive = rdM ? rdM[1].trim() : null;
+    const sdM = text.match(/Sale Date[:\s]+([^\n]{4,40})/i)
+      || text.match(/Auction Date[:\s]+([^\n]{4,40})/i);
+    const saleDate = sdM ? sdM[1].trim() : null;
+    const locM = text.match(/Location[:\s]+([^\n]{3,100})/i) || text.match(/Yard[:\s]+([^\n]{3,100})/i);
+    const vehicleLocation = locM ? locM[1].trim() : null;
+    const locMeta = FrikAuctionSources.parseLocation(vehicleLocation || '', sourceConfig);
+
+    const evM = text.match(/Estimated.*?Value[:\s]*\$?([\d,]+)/i)
+      || text.match(/Actual Cash.*?Value[:\s]*\$?([\d,]+)/i);
+    const estimatedValue = evM ? parseInt(evM[1].replace(/,/g, ''), 10) : null;
+
+    const imgEls = Array.from(document.querySelectorAll('img[src]'));
+    const images = imgEls
+      .map(img => img.src)
+      .filter(src => /iaai|copart|progi|cdn|images/i.test(src) && !/logo|pixel|placeholder/i.test(src))
+      .filter((v, i, a) => a.indexOf(v) === i)
+      .slice(0, 10);
+
+    const cleanUrl = location.href.split('?')[0];
+    return {
+      vin, vehicleTitle, year, make, model, lotNumber,
+      primaryDamage, secondaryDamage,
+      odometerKm: odo.odometerKm, odometerMi: odo.odometerMi, odometer: odo.odometer,
+      runDrive, saleDate, location: vehicleLocation, locationMeta: locMeta,
+      estimatedValue, images, auctionUrl: cleanUrl, source: sourceConfig.label,
+      currency: sourceConfig.currency,
+    };
+  }
+
+  function extractProgi() {
+    const text = document.body ? document.body.innerText : '';
+    const vinM = text.match(/\b([A-HJ-NPR-Z0-9]{17})\b/);
+    const vin  = vinM ? vinM[1] : null;
+    const titleEl = document.querySelector('h1, h2, [class*="title"], [class*="vehicle"]');
+    const vehicleTitle = titleEl ? titleEl.textContent.trim().substring(0, 120) : null;
+    let year = null, make = null, model = null;
+    if (vehicleTitle) {
+      const m = vehicleTitle.match(/^(\d{4})\s+([A-Za-z\-]+)\s+(.+)/);
+      if (m) {
+        year  = parseInt(m[1], 10);
+        make  = m[2];
+        model = m[3].replace(/\s*[|#].*$/, '').trim();
+      }
+    }
+    const lotFromUrl  = location.href.match(/[/-]([0-9]{4,8})(?:[/?#]|$)/);
+    const lotFromText = text.match(/\b(Lot|Lotu|#)[:\s#]*([0-9]{4,8})\b/i);
+    const lotNumber   = (lotFromUrl && lotFromUrl[1] !== location.hostname)
+      ? lotFromUrl[1] : (lotFromText ? lotFromText[2] : null);
+    const primaryDamage   = labelValFrom(text, 'Primary Damage')   || labelValFrom(text, 'Uszkodzenie');
+    const secondaryDamage = labelValFrom(text, 'Secondary Damage') || labelValFrom(text, 'Dodatkowe');
+    const odo = parseOdometer(text);
+    const runDrive = (text.match(/Run(?:s)?\s*(?:&|and|\/)\s*Drive[:\s]*([^\n]+)/i) || [null, null])[1];
+    const saleDate = (text.match(/Sale[:\s]+([^\n]{3,50})/i) || [null, null])[1];
+    const locM = text.match(/Location[:\s]+([^\n]{3,100})/i) || text.match(/Lokalizacja[:\s]+([^\n]{3,100})/i);
+    const vehicleLocation = locM ? locM[1].trim() : null;
+    const locMeta = FrikAuctionSources.parseLocation(vehicleLocation || '', sourceConfig);
+    const evM = text.match(/(?:Value|Warto|Price)[:\s]*\$?([\d,]+)/i);
+    const estimatedValue = evM ? parseInt(evM[1].replace(/,/g, ''), 10) : null;
+    const images = Array.from(document.querySelectorAll('img[src]'))
+      .map(i => i.src)
+      .filter(s => /progi|cdn|images/i.test(s) && !/logo|icon|pixel/i.test(s))
+      .filter((v, i, a) => a.indexOf(v) === i)
+      .slice(0, 10);
+    return {
+      vin, vehicleTitle, year, make, model, lotNumber,
+      primaryDamage, secondaryDamage,
+      odometerKm: odo.odometerKm, odometerMi: odo.odometerMi, odometer: odo.odometer,
+      runDrive, saleDate, location: vehicleLocation, locationMeta: locMeta,
+      estimatedValue, images, auctionUrl: location.href.split('?')[0], source: sourceConfig.label,
+      currency: sourceConfig.currency,
+    };
+  }
+
+  function extractData() {
+    if (sourceConfig.id === 'PROGI_CA') return extractProgi();
+    return extractStandard();
+  }
+
+  // ── Build COMMENTS field ─────────────────────────────────────────
+  function odometerLine(d) {
+    if (d.odometerKm && d.odometerMi) {
+      return `Przebieg: ${d.odometerKm.toLocaleString('pl')} km (≈ ${d.odometerMi.toLocaleString('pl')} mil)`;
+    }
+    if (d.odometerKm) return `Przebieg: ${d.odometerKm.toLocaleString('pl')} km`;
+    if (d.odometerMi) return `Przebieg: ${d.odometerMi.toLocaleString('pl')} mil`;
+    if (d.odometer)   return `Przebieg: ${d.odometer.toLocaleString('pl')} mil`;
+    return null;
+  }
+
+  function buildComments(d) {
+    const cur = d.currency || 'USD';
+    const valLbl = cur === 'CAD' ? 'CAD' : 'USD';
+    const lines = [
+      `=== Dane pojazdu z ${d.source} ===`,
+      d.vin         ? `VIN: ${d.vin}`                             : null,
+      d.lotNumber   ? `Lot: ${d.lotNumber}`                       : null,
+      '',
+      d.year        ? `Rok: ${d.year}`                            : null,
+      d.make        ? `Marka: ${d.make}`                          : null,
+      d.model       ? `Model: ${d.model}`                         : null,
+      odometerLine(d),
+      '',
+      d.primaryDamage   ? `Uszkodzenie główne: ${d.primaryDamage}`      : null,
+      d.secondaryDamage ? `Uszkodzenie dodatkowe: ${d.secondaryDamage}` : null,
+      d.runDrive    ? `Czy jeździ: ${d.runDrive}`                 : null,
+      '',
+      d.location    ? `Lokalizacja: ${d.location}`                : null,
+      d.saleDate    ? `Data licytacji: ${d.saleDate}`             : null,
+      d.estimatedValue
+        ? `Szacowana wartość: $${d.estimatedValue.toLocaleString('en')} ${valLbl}` : null,
+      '',
+      d.auctionUrl  ? `Link aukcji: ${d.auctionUrl}`              : null,
+      '',
+      d.images && d.images.length
+        ? `Zdjęcia:\n${d.images.join('\n')}`
+        : null,
+    ].filter(x => x !== null);
+    return lines.join('\n');
+  }
+
+  async function getWebhookBase() {
+    const { frik_webhook: u } = await chrome.storage.local.get('frik_webhook');
+    if (!u || typeof u !== 'string' || !u.trim()) {
+      throw new Error('Brak URL webhooka — otwórz menu wtyczki i zapisz pełny adres rest Bitrix24.');
+    }
+    return u.replace(/\/+$/, '');
+  }
+
+  function portalHostFromWebhookBase(base) {
+    try {
+      return new URL(/^https?:\/\//i.test(base) ? base : 'https://' + base).hostname;
+    } catch (_) {
+      return 'mrfrik.bitrix24.pl';
+    }
+  }
+
+  // ── Add photos as timeline comment (non-blocking) ─────────────────
+  async function addPhotosComment(quoteId, images, whBase) {
+    if (!images || !images.length) return;
+    const imgs = images.slice(0, 10)
+      .map(u => `<img src="${u}" style="max-width:220px;margin:3px;border-radius:4px;display:inline-block">`)
+      .join('');
+    await fetch(whBase + '/crm.timeline.comment.add', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        fields: {
+          ENTITY_ID:   quoteId,
+          ENTITY_TYPE: 'quote',
+          COMMENT:     `<p><strong>Zdjęcia pojazdu (${images.length} szt.):</strong></p>${imgs}`,
+        },
+      }),
+    });
+  }
+
+  // ── Load recent deals with client names ──────────────────────────
+  async function loadDeals(forceRefresh) {
+    if (!forceRefresh) {
+      const cache = await new Promise(r =>
+        chrome.storage.local.get(['frik_deals_cache', 'frik_deals_ts'], r)
+      );
+      if (cache.frik_deals_cache && (Date.now() - (cache.frik_deals_ts || 0)) < 300000) {
+        return cache.frik_deals_cache;
+      }
+    }
+    const wh = await getWebhookBase();
+
+    const resp = await fetch(wh + '/crm.deal.list', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        order:  { DATE_MODIFY: 'DESC' },
+        select: ['ID', 'TITLE', 'CONTACT_ID', 'COMPANY_ID'],
+        start:  0,
+      }),
+    });
+    const json = await resp.json();
+    if (json.error) throw new Error(json.error_description || json.error);
+
+    const deals = json.result || [];
+
+    // Batch-fetch contact and company names
+    const contactIds = [...new Set(deals.map(d => d.CONTACT_ID).filter(Boolean))].slice(0, 25);
+    const companyIds = [...new Set(deals.map(d => d.COMPANY_ID).filter(Boolean))].slice(0, 25);
+    const batchCmds  = {};
+    contactIds.forEach((id, i) => {
+      batchCmds[`c${i}`] = `crm.contact.get?id=${id}&select[]=ID&select[]=NAME&select[]=LAST_NAME`;
+    });
+    companyIds.forEach((id, i) => {
+      batchCmds[`co${i}`] = `crm.company.get?id=${id}&select[]=ID&select[]=TITLE`;
+    });
+
+    const contactMap = {};
+    const companyMap = {};
+    if (Object.keys(batchCmds).length > 0) {
+      try {
+        const bResp = await fetch(wh + '/batch', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ halt: 0, cmd: batchCmds }),
+        });
+        const bJson = await bResp.json();
+        const res   = (bJson.result && bJson.result.result) || {};
+        contactIds.forEach((id, i) => {
+          const c = res[`c${i}`];
+          if (c) contactMap[String(id)] = [c.NAME, c.LAST_NAME].filter(Boolean).join(' ');
+        });
+        companyIds.forEach((id, i) => {
+          const co = res[`co${i}`];
+          if (co) companyMap[String(id)] = co.TITLE;
+        });
+      } catch (_) { /* name lookup failed — degraded gracefully */ }
+    }
+
+    const result = deals.map(d => ({
+      id:        String(d.ID),
+      title:     d.TITLE || ('Deal #' + d.ID),
+      contactId: d.CONTACT_ID || null,
+      companyId: d.COMPANY_ID || null,
+      clientName: companyMap[String(d.COMPANY_ID)] || contactMap[String(d.CONTACT_ID)] || '',
+    }));
+
+    chrome.storage.local.set({ frik_deals_cache: result, frik_deals_ts: Date.now() });
+    return result;
+  }
+
+  // ── Create Quote via Bitrix24 webhook ────────────────────────────
+  async function createQuote(data, dealId, poziomEnumId, contactId, companyId) {
+    const wh = await getWebhookBase();
+    const title = data.vehicleTitle
+      || [data.year, data.make, data.model].filter(Boolean).join(' ')
+      || 'Auto z aukcji';
+
+    const loc = data.locationMeta || FrikAuctionSources.parseLocation(data.location || '', sourceConfig);
+    const cur = data.currency || 'USD';
+
+    const fields = {
+      DEAL_ID:     parseInt(dealId, 10),
+      TITLE:       title,
+      COMMENTS:    buildComments(data),
+      STATUS_ID:   'D',
+      CURRENCY_ID: cur,
+    };
+
+    if (contactId) fields.CONTACT_ID = parseInt(contactId, 10);
+    if (companyId) fields.COMPANY_ID = parseInt(companyId, 10);
+
+    if (data.estimatedValue) {
+      fields.OPPORTUNITY  = data.estimatedValue;
+      fields['UF_CRM_QUOTE_1749798603485'] = {
+        VALUE: String(data.estimatedValue), CURRENCY: cur,
+      };
+    }
+    if (sourceConfig.sourceEnum != null) {
+      fields['UF_CRM_QUOTE_1775199244953'] = sourceConfig.sourceEnum;
+    }
+    if (loc && loc.country) fields['UF_CRM_QUOTE_COUNTRY'] = loc.country;
+    if (loc && loc.region) fields['UF_CRM_QUOTE_PROVINCE'] = loc.region;
+    if (loc && loc.taxRegime) fields['UF_CRM_QUOTE_TAX_REGIME'] = loc.taxRegime;
+    if (data.vin) fields['UF_CRM_QUOTE_VIN'] = data.vin;
+    if (data.lotNumber) fields['UF_CRM_QUOTE_LOT_NUMBER'] = String(data.lotNumber);
+
+    if (poziomEnumId && cachedFieldName) {
+      fields[cachedFieldName] = poziomEnumId;
+    }
+
+    const endpoint = wh + '/crm.quote.add';
+    const resp = await fetch(endpoint, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ fields }),
+    });
+
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const json = await resp.json();
+    if (json.error) throw new Error(json.error_description || json.error);
+
+    const quoteId = json.result;
+    if (data.images && data.images.length > 0) {
+      addPhotosComment(quoteId, data.images, wh).catch(() => {});
+    }
+    return quoteId;
+  }
+
+  // ── Poziom dopasowania — dynamic lookup & cache ──────────────────
+  let cachedFieldName = null;
+  let cachedLevelItems = []; // [{ id, value }]
+
+  async function loadLevelItems() {
+    if (cachedLevelItems.length > 0) return;
+
+    // Try extension storage cache first
+    const stored = await new Promise(r =>
+      chrome.storage.local.get(['frik_poziom_field', 'frik_poziom_items'], r)
+    );
+    if (stored.frik_poziom_field && stored.frik_poziom_items && stored.frik_poziom_items.length) {
+      cachedFieldName  = stored.frik_poziom_field;
+      cachedLevelItems = stored.frik_poziom_items;
+      return;
+    }
+
+    try {
+      const wh = await getWebhookBase();
+      const resp = await fetch(wh + '/crm.quote.userfield.list.json', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filter: { XML_ID: 'FRIK_POZIOM_DOPASOWANIA' } }),
+      });
+      const json = await resp.json();
+      if (json.result && json.result.length > 0) {
+        const field = json.result[0];
+        cachedFieldName  = field.FIELD_NAME;
+        cachedLevelItems = (field.LIST || []).map(i => ({
+          id: parseInt(i.ID, 10), value: i.VALUE,
+        }));
+        chrome.storage.local.set({
+          frik_poziom_field: cachedFieldName,
+          frik_poziom_items: cachedLevelItems,
+        });
+      }
+    } catch (_) { /* brak webhooka / pole niegotowe */ }
+  }
+
+  // ── Floating action button + panel ────────────────────────────────
+  const PANEL_ID = 'frik-panel';
+  const FAB_ID   = 'frik-fab';
+
+  function removePanel() {
+    const el = document.getElementById(PANEL_ID);
+    if (el) el.remove();
+    // Restore FAB icon
+    const fab = document.getElementById(FAB_ID);
+    if (fab) fab.innerHTML = FAB_ICON;
+  }
+
+  function removeFab() {
+    removePanel();
+    const el = document.getElementById(FAB_ID);
+    if (el) el.remove();
+  }
+
+  function togglePanel() {
+    if (document.getElementById(PANEL_ID)) { removePanel(); return; }
+    injectPanel();
+  }
+
+  // SVG Bitrix24-style "B" icon
+  const FAB_ICON = `<svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+    <path d="M6 4h7.5a3.5 3.5 0 010 7H6V4z" fill="white"/>
+    <path d="M6 11h8.5a3.5 3.5 0 010 7H6v-7z" fill="white"/>
+  </svg>`;
+
+  function injectFab() {
+    if (document.getElementById(FAB_ID)) return;
+    const fab = document.createElement('button');
+    fab.id    = FAB_ID;
+    fab.title = 'MrFrik — Utwórz ofertę w Bitrix24';
+    fab.innerHTML = FAB_ICON;
+    fab.style.cssText = [
+      'position:fixed', 'bottom:20px', 'right:20px', 'z-index:2147483647',
+      'width:54px', 'height:54px', 'border-radius:50%',
+      'background:' + ACCENT, 'border:none', 'cursor:pointer',
+      'box-shadow:0 4px 18px rgba(0,0,0,.32)',
+      'display:flex', 'align-items:center', 'justify-content:center',
+      'transition:transform .15s,box-shadow .15s',
+      'padding:0',
+    ].join(';');
+    fab.addEventListener('mouseenter', () => {
+      fab.style.transform = 'scale(1.10)';
+      fab.style.boxShadow = '0 6px 24px rgba(0,0,0,.40)';
+    });
+    fab.addEventListener('mouseleave', () => {
+      fab.style.transform = '';
+      fab.style.boxShadow = '0 4px 18px rgba(0,0,0,.32)';
+    });
+    fab.addEventListener('click', togglePanel);
+    document.body.appendChild(fab);
+  }
+
+  async function injectPanel() {
+    if (document.getElementById(PANEL_ID)) return;
+
+    const stored = await new Promise(r => chrome.storage.local.get('frik_deal_id', r));
+    await loadLevelItems();
+
+    const hasLevel = cachedLevelItems.length > 0;
+    const levelOpts = hasLevel
+      ? '<option value="">— wybierz —</option>' +
+        cachedLevelItems.map(i =>
+          `<option value="${i.id}">${i.value}</option>`
+        ).join('')
+      : '';
+
+    const panel = document.createElement('div');
+    panel.id = PANEL_ID;
+    panel.style.cssText = [
+      'position:fixed', 'bottom:84px', 'right:20px', 'z-index:2147483647',
+      'width:300px', 'background:#fff', 'border-radius:10px',
+      'box-shadow:0 8px 28px rgba(0,0,0,.22)', 'overflow:hidden',
+      'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif',
+      'font-size:13px',
+    ].join(';');
+
+    panel.innerHTML = `
+      <div id="frik-hdr" style="background:${ACCENT};color:#fff;padding:10px 14px;
+           display:flex;align-items:center;justify-content:space-between;
+           cursor:move;user-select:none">
+        <span style="font-weight:700">&#128661; MrFrik — Utwórz ofertę</span>
+        <button id="frik-x" title="Zamknij"
+          style="background:none;border:none;color:#fff;font-size:20px;
+                 cursor:pointer;padding:0 0 0 10px;line-height:1">×</button>
+      </div>
+      <div style="padding:12px 14px">
+
+        <div style="margin-bottom:10px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
+            <span style="font-size:11px;font-weight:600;color:#666;
+                         text-transform:uppercase;letter-spacing:.4px">Deal — Klient</span>
+            <button id="frik-deal-refresh" title="Odśwież listę"
+              style="background:none;border:1px solid #d0d7de;border-radius:4px;
+                     cursor:pointer;font-size:12px;padding:2px 7px;color:#555;
+                     font-family:inherit;line-height:1.5">⟳ Odśwież</button>
+          </div>
+          <select id="frik-deal-sel"
+            style="width:100%;border:1px solid #d0d7de;border-radius:5px;
+                   padding:6px 8px;font-size:12px;font-family:inherit;
+                   outline:none;background:#fff">
+            <option value="">⏳ Ładowanie dealów…</option>
+          </select>
+        </div>
+
+        ${hasLevel ? `
+        <div style="margin-bottom:10px">
+          <div style="font-size:11px;font-weight:600;color:#666;margin-bottom:4px;
+                      text-transform:uppercase;letter-spacing:.4px">Poziom dopasowania</div>
+          <select id="frik-level" style="width:100%;border:1px solid #d0d7de;
+                  border-radius:5px;padding:6px 9px;font-size:13px;
+                  font-family:inherit;outline:none;background:#fff">
+            ${levelOpts}
+          </select>
+        </div>` : ''}
+
+        <button id="frik-create-btn"
+          style="width:100%;background:${ACCENT};color:#fff;border:none;
+                 border-radius:6px;padding:10px 14px;font-size:13px;font-weight:700;
+                 cursor:pointer;font-family:inherit;transition:background .15s">
+          Utwórz ofertę w Bitrix24
+        </button>
+        <div id="frik-status"
+          style="margin-top:8px;font-size:12px;display:none;padding:8px 10px;
+                 border-radius:5px;line-height:1.5;word-break:break-all"></div>
+      </div>`;
+
+    document.body.appendChild(panel);
+
+    // Close
+    document.getElementById('frik-x').onclick = removePanel;
+
+    // Draggable header
+    makeDraggable(panel, document.getElementById('frik-hdr'));
+
+    // Populate deal select
+    async function populateDeals(forceRefresh) {
+      const sel = document.getElementById('frik-deal-sel');
+      if (!sel) return;
+      sel.disabled = true;
+      sel.innerHTML = '<option value="">⏳ Ładowanie…</option>';
+      try {
+        const deals       = await loadDeals(forceRefresh);
+        const storedDeal  = await new Promise(r => chrome.storage.local.get('frik_deal_id', r));
+        const currentId   = String(storedDeal.frik_deal_id || '');
+        sel.innerHTML = '<option value="">— wybierz deal —</option>' +
+          deals.map(d => {
+            const client  = d.clientName ? ` — ${d.clientName}` : '';
+            const label   = `${d.title}${client} (#${d.id})`;
+            const sel_    = d.id === currentId ? 'selected' : '';
+            return `<option value="${d.id}"
+              data-contact-id="${d.contactId || ''}"
+              data-company-id="${d.companyId || ''}"
+              ${sel_}>${label}</option>`;
+          }).join('');
+      } catch (err) {
+        sel.innerHTML = `<option value="">❌ Błąd: ${err.message.substring(0, 50)}</option>`;
+      }
+      sel.disabled = false;
+    }
+
+    populateDeals(false);
+    const refreshBtn = document.getElementById('frik-deal-refresh');
+    if (refreshBtn) refreshBtn.addEventListener('click', () => populateDeals(true));
+
+    // Create button
+    const createBtn = document.getElementById('frik-create-btn');
+    createBtn.addEventListener('mouseenter', () => {
+      if (!createBtn.disabled) createBtn.style.background = ACCENT_DARK;
+    });
+    createBtn.addEventListener('mouseleave', () => {
+      if (!createBtn.disabled) createBtn.style.background = ACCENT;
+    });
+
+    createBtn.addEventListener('click', async () => {
+      if (createBtn.disabled) return;
+
+      const sel        = document.getElementById('frik-deal-sel');
+      const dealIdVal  = sel ? sel.value : '';
+      if (!dealIdVal) {
+        showStatus('Wybierz deal z listy.', 'warn');
+        return;
+      }
+      const selOpt     = sel && sel.selectedOptions[0];
+      const selContactId = selOpt ? (selOpt.dataset.contactId || null) : null;
+      const selCompanyId = selOpt ? (selOpt.dataset.companyId || null) : null;
+
+      const data = extractData();
+      if (!data.vin && !data.vehicleTitle && !data.year) {
+        showStatus('Strona jeszcze się ładuje — poczekaj chwilę i spróbuj ponownie.', 'warn');
+        return;
+      }
+
+      const levelEl = document.getElementById('frik-level');
+      const poziomId = levelEl ? (parseInt(levelEl.value) || null) : null;
+
+      createBtn.disabled = true;
+      createBtn.style.background = '#888';
+      createBtn.textContent = 'Tworzę ofertę…';
+
+      try {
+        const quoteId = await createQuote(data, dealIdVal, poziomId, selContactId, selCompanyId);
+        createBtn.style.background = '#34b251';
+        createBtn.textContent = '✓ Oferta #' + quoteId + ' utworzona!';
+
+        const wh0 = await getWebhookBase();
+        const bxH = portalHostFromWebhookBase(wh0);
+        const link = `https://${bxH}/crm/quote/show/${quoteId}/`;
+        showStatus(
+          `<a href="${link}" target="_blank"
+             style="color:${ACCENT};font-weight:600">Otwórz ofertę w Bitrix24 →</a>`,
+          'ok'
+        );
+
+        // Remember this deal for next vehicle
+        chrome.storage.local.set({ frik_deal_id: String(dealIdVal) });
+
+        setTimeout(() => {
+          createBtn.disabled = false;
+          createBtn.style.background = ACCENT;
+          createBtn.textContent = 'Utwórz ofertę w Bitrix24';
+        }, 8000);
+      } catch (err) {
+        showStatus('Błąd: ' + err.message, 'error');
+        createBtn.disabled = false;
+        createBtn.style.background = ACCENT;
+        createBtn.textContent = 'Utwórz ofertę w Bitrix24';
+      }
+    });
+
+    function showStatus(html, type) {
+      const colors = {
+        ok:    ['#eaf7ec', '#34b251'],
+        warn:  ['#fff8e1', '#f0a020'],
+        error: ['#ffeaea', '#e53935'],
+      };
+      const [bg, border] = colors[type] || ['#f5f5f5', '#999'];
+      const el = document.getElementById('frik-status');
+      el.innerHTML = html;
+      el.style.background   = bg;
+      el.style.border       = '1px solid ' + border;
+      el.style.display      = 'block';
+    }
+  }
+
+  function makeDraggable(el, handle) {
+    let ox = 0, oy = 0, sx = 0, sy = 0;
+    handle.addEventListener('mousedown', function (e) {
+      e.preventDefault();
+      sx = e.clientX; sy = e.clientY;
+      ox = el.offsetLeft || (window.innerWidth - el.offsetWidth - 20);
+      oy = el.offsetTop  || (window.innerHeight - el.offsetHeight - 20);
+      function onMove(m) {
+        el.style.left   = Math.max(0, ox + m.clientX - sx) + 'px';
+        el.style.top    = Math.max(0, oy + m.clientY - sy) + 'px';
+        el.style.right  = 'auto';
+        el.style.bottom = 'auto';
+      }
+      function onUp() {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      }
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  }
+
+  // ── SPA navigation tracking ──────────────────────────────────────
+  let lastPath  = location.pathname;
+  let injectTid = null;
+
+  function onNavigate() {
+    if (injectTid) clearTimeout(injectTid);
+    removeFab();
+    if (isDetailPage()) {
+      injectTid = setTimeout(injectFab, 2500);
+    }
+  }
+
+  ['pushState', 'replaceState'].forEach(method => {
+    const original = history[method].bind(history);
+    history[method] = function (...args) {
+      const result = original(...args);
+      if (location.pathname !== lastPath) {
+        lastPath = location.pathname;
+        onNavigate();
+      }
+      return result;
+    };
+  });
+  window.addEventListener('popstate', onNavigate);
+
+  // ── Initial check ────────────────────────────────────────────────
+  if (isDetailPage()) {
+    setTimeout(injectFab, 2500);
+  }
+
+})();

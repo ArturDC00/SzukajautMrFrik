@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Szukaj aut — MrFrik</title>
+  <script src="//api.bitrix24.com/api/v1/"></script>
+  <style>
+    :root {
+      --blue:       #2fc6f6;
+      --blue-dark:  #0b66c2;
+      --bg:         #f5f7fa;
+      --card:       #fff;
+      --border:     #e0e4ea;
+      --text:       #333;
+      --muted:      #888;
+      --green:      #34b251;
+      --orange:     #f0a020;
+      --red:        #e53935;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 12px 14px;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    /* ── Extension status bar ────────────────────────────── */
+    .ext-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 12px;
+      padding: 8px 12px;
+      border-radius: 7px;
+      font-size: 12px;
+    }
+    .ext-bar.ok  { background: #eaf7ec; border: 1px solid #a8ddb5; }
+    .ext-bar.bad { background: #fff8e1; border: 1px solid #f9d04a; }
+    .ext-bar.loading { background: #f0f4fb; border: 1px solid var(--border); }
+
+    .ext-status { display: flex; align-items: center; gap: 6px; }
+    .ext-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--muted); flex-shrink: 0;
+    }
+    .ext-dot.ok  { background: var(--green); }
+    .ext-dot.bad { background: var(--orange); }
+
+    .ext-install-btn {
+      padding: 5px 12px; font-size: 11px; font-weight: 600;
+      border: none; border-radius: 5px;
+      background: var(--blue-dark); color: #fff;
+      cursor: pointer; white-space: nowrap;
+      font-family: inherit;
+      transition: background .15s;
+      text-decoration: none;
+      display: inline-block;
+    }
+    .ext-install-btn:hover { background: #0955a8; }
+
+    /* ── Card ────────────────────────────────────────────── */
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+      margin-bottom: 10px;
+    }
+    .card-title {
+      font-size: 11px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: .5px;
+      color: var(--blue-dark); margin-bottom: 12px;
+      padding-bottom: 6px;
+      border-bottom: 2px solid var(--blue);
+    }
+
+    /* ── Deal info ───────────────────────────────────────── */
+    .deal-row { display: flex; gap: 6px; align-items: baseline; margin-bottom: 4px; }
+    .deal-lbl { font-size: 11px; color: var(--muted); white-space: nowrap; }
+    .deal-val { font-size: 13px; font-weight: 600; word-break: break-word; }
+    .deal-val.loading { color: var(--muted); font-weight: 400; }
+
+    /* ── Search buttons ──────────────────────────────────── */
+    .search-btns { display: flex; gap: 10px; margin-top: 4px; flex-wrap: wrap; }
+    .search-btn {
+      flex: 1; min-width: 130px;
+      padding: 14px 12px; font-size: 14px; font-weight: 700;
+      border: none; border-radius: 8px; cursor: pointer;
+      font-family: inherit; transition: background .15s, transform .1s;
+      display: flex; flex-direction: column; align-items: center; gap: 6px;
+      line-height: 1.2;
+    }
+    .search-btn .icon { font-size: 24px; }
+    .search-btn:active { transform: scale(0.97); }
+
+    .search-btn.iaai   { background: #e8f4fd; color: #0b66c2; border: 2px solid #0b66c2; }
+    .search-btn.iaai:hover   { background: #cce5f9; }
+    .search-btn.copart { background: #fff0e8; color: #d35400; border: 2px solid #d35400; }
+    .search-btn.copart:hover { background: #ffe0cc; }
+    .search-btn.progi { background: #f3e8ff; color: #5a2d9e; border: 2px solid #6f42c1; }
+    .search-btn.progi:hover { background: #e6d4fa; }
+    .search-btn.muted   { background: #f0f2f5; color: #555; border: 2px solid #b8c0cc; }
+    .search-btn.muted:hover { background: #e4e8ee; }
+
+    .country-hdr {
+      font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
+      color: var(--blue-dark); margin: 12px 0 6px; padding-top: 4px;
+      border-top: 1px solid var(--border);
+    }
+    .country-hdr:first-of-type { border-top: none; margin-top: 0; padding-top: 0; }
+
+    .search-btn:disabled {
+      opacity: .5; cursor: not-allowed; transform: none;
+    }
+
+    /* ── How it works ────────────────────────────────────── */
+    .steps { list-style: none; padding: 0; }
+    .steps li {
+      display: flex; align-items: flex-start; gap: 10px;
+      margin-bottom: 8px; font-size: 12px; color: var(--text);
+    }
+    .step-num {
+      width: 20px; height: 20px; flex-shrink: 0;
+      border-radius: 50%; background: var(--blue-dark);
+      color: #fff; font-size: 11px; font-weight: 700;
+      display: flex; align-items: center; justify-content: center;
+    }
+
+    /* ── No extension warning inside card ────────────────── */
+    .no-ext-msg {
+      padding: 12px; background: #fff8e1; border: 1px solid #f9d04a;
+      border-radius: 6px; font-size: 12px; line-height: 1.6;
+      margin-bottom: 10px; display: none;
+    }
+  </style>
+</head>
+<body>
+
+<!-- Extension status bar -->
+<div class="ext-bar loading" id="extBar">
+  <div class="ext-status">
+    <div class="ext-dot" id="extDot"></div>
+    <span id="extMsg">Sprawdzam wtyczkę…</span>
+  </div>
+  <a class="ext-install-btn" id="extInstallBtn"
+     href="https://klienci.przemek.czarnota.info/frik/instalacja-wtyczki.html"
+     target="_blank" style="display:none">
+    Instaluj wtyczkę
+  </a>
+</div>
+
+<!-- Deal info + search buttons -->
+<div class="card">
+  <div class="card-title">&#128269; Szukaj aut do oferty</div>
+
+  <div class="deal-row">
+    <span class="deal-lbl">Deal:</span>
+    <span class="deal-val loading" id="dealTitle">wczytuję…</span>
+  </div>
+  <div class="deal-row">
+    <span class="deal-lbl">ID:</span>
+    <span class="deal-val loading" id="dealIdDisplay">—</span>
+  </div>
+
+  <div style="margin-top: 14px;">
+    <div class="no-ext-msg" id="noExtMsg">
+      ⚠️ Wtyczka nie jest zainstalowana. Możesz przeglądać aukcje, ale przycisk
+      <strong>"Utwórz ofertę"</strong> na stronie aukcji nie będzie dostępny.<br>
+      Zainstaluj wtyczkę, żeby tworzyć oferty jednym kliknięciem.
+    </div>
+
+    <div class="country-hdr">Stany Zjednoczone (USA)</div>
+    <div class="search-btns">
+      <button class="search-btn iaai search-btn--auction" id="btnIAAIus" onclick="openAuction('iaai-us')" disabled>
+        <span class="icon">&#128661;</span>
+        IAAI
+      </button>
+      <button class="search-btn copart search-btn--auction" id="btnCopartUs" onclick="openAuction('copart-us')" disabled>
+        <span class="icon">&#128664;</span>
+        Copart
+      </button>
+    </div>
+    <div class="country-hdr">Kanada</div>
+    <div class="search-btns">
+      <button class="search-btn iaai search-btn--auction" id="btnIAAIca" onclick="openAuction('iaai-ca')" disabled>
+        <span class="icon">&#128661;</span>
+        IAAI
+      </button>
+      <button class="search-btn copart search-btn--auction" id="btnCopartCa" onclick="openAuction('copart-ca')" disabled>
+        <span class="icon">&#128664;</span>
+        Copart
+      </button>
+      <button class="search-btn progi search-btn--auction" id="btnProgi" onclick="openAuction('progi-ca')" disabled>
+        <span class="icon">&#127984;</span>
+        Progi
+      </button>
+    </div>
+    <div class="search-btns" style="margin-top:10px">
+      <button class="search-btn muted" id="btnHelp" type="button"
+        onclick="window.open('https://klienci.przemek.czarnota.info/frik/instalacja-wtyczki.html', '_blank', 'noopener')">
+        <span class="icon">&#128196;</span>
+        Instalacja / pomoc
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- How it works -->
+<div class="card">
+  <div class="card-title">Jak to działa?</div>
+  <ul class="steps">
+    <li>
+      <div class="step-num">1</div>
+      <span>Wybierz portal (USA lub Kanada: IAAI, Copart, Progi) — strona aukcji otworzy się w nowej karcie.</span>
+    </li>
+    <li>
+      <div class="step-num">2</div>
+      <span>Znajdź interesujące auto i wejdź na jego stronę.</span>
+    </li>
+    <li>
+      <div class="step-num">3</div>
+      <span>Kliknij przycisk <strong>"Utwórz ofertę w Bitrix24"</strong> (pojawi się w prawym dolnym rogu strony aukcji).</span>
+    </li>
+    <li>
+      <div class="step-num">4</div>
+      <span>Gotowe — oferta z danymi auta zostaje automatycznie dodana do tego deala w Bitrix24.</span>
+    </li>
+  </ul>
+</div>
+
+<script>
+'use strict';
+
+let dealId    = null;
+let bxDomain  = null;
+
+// ── Extension detection — runs IMMEDIATELY, independent of BX24.init ─────
+// (content-detect.js fires at document_start and dispatches 'frik-ext-ping')
+(function initExtDetection() {
+  let resolved = false;
+
+  function setExtStatus(installed) {
+    if (resolved) return;
+    resolved = true;
+
+    const bar        = document.getElementById('extBar');
+    const dot        = document.getElementById('extDot');
+    const msg        = document.getElementById('extMsg');
+    const installBtn = document.getElementById('extInstallBtn');
+    const noExtMsg   = document.getElementById('noExtMsg');
+
+    if (installed) {
+      bar.className        = 'ext-bar ok';
+      dot.className        = 'ext-dot ok';
+      msg.textContent      = 'Wtyczka MrFrik aktywna ✓';
+      installBtn.style.display = 'none';
+      noExtMsg.style.display   = 'none';
+    } else {
+      bar.className        = 'ext-bar bad';
+      dot.className        = 'ext-dot bad';
+      msg.textContent      = 'Wtyczka nie jest zainstalowana';
+      installBtn.style.display = 'inline-block';
+      noExtMsg.style.display   = 'block';
+    }
+  }
+
+  // 1. Immediate check — attribute set by content-detect.js at document_start
+  if (document.documentElement.getAttribute('data-frik-ext') === '1') {
+    setExtStatus(true);
+    return;
+  }
+
+  // 2. Listen for the CustomEvent dispatched by content-detect.js after DOMContentLoaded
+  window.addEventListener('frik-ext-ping', function () {
+    setExtStatus(true);
+  }, { once: true });
+
+  // 3. Fallback: after 2 s with no signal → assume not installed
+  setTimeout(function () {
+    setExtStatus(false);
+  }, 2000);
+})();
+
+// ── Bitrix24 init ─────────────────────────────────────────────────
+BX24.init(function () {
+  const info = BX24.placement.info();
+
+  // Get deal ID from placement options
+  if (info && info.options) {
+    dealId = info.options.ID       || info.options.id       ||
+             info.options.DEAL_ID  || info.options.deal_id  ||
+             info.options.ELEMENT_ID || info.options.element_id;
+  }
+
+  // Get Bitrix24 portal domain from parent frame ancestry
+  try {
+    if (window.location.ancestorOrigins && window.location.ancestorOrigins.length > 0) {
+      bxDomain = new URL(window.location.ancestorOrigins[0]).hostname;
+    }
+  } catch (_) {}
+
+  // Enable buttons only if we have deal ID
+  if (dealId) {
+    document.getElementById('dealIdDisplay').textContent = '#' + dealId;
+    document.getElementById('dealIdDisplay').classList.remove('loading');
+    document.querySelectorAll('.search-btn--auction').forEach(function (b) {
+      b.disabled = false;
+    });
+
+    // Load deal title
+    BX24.callMethod('crm.deal.get', { id: dealId }, function (res) {
+      if (!res.error()) {
+        const deal = res.data();
+        const titleEl = document.getElementById('dealTitle');
+        titleEl.textContent = deal.TITLE || ('Deal #' + dealId);
+        titleEl.classList.remove('loading');
+      }
+    });
+  } else {
+    document.getElementById('dealTitle').textContent = 'Nie rozpoznano deala';
+    document.getElementById('dealIdDisplay').textContent = '—';
+  }
+});
+
+// ── Open auction site ─────────────────────────────────────────────
+function openAuction(site) {
+  if (dealId) {
+    document.documentElement.setAttribute('data-frik-domain', bxDomain || 'mrfrik.bitrix24.pl');
+    document.documentElement.setAttribute('data-frik-deal-id', String(dealId));
+    window.dispatchEvent(new CustomEvent('frik-set-deal', {
+      detail: { dealId: String(dealId), domain: bxDomain || 'mrfrik.bitrix24.pl' },
+    }));
+  }
+
+  const urls = {
+    'iaai-us':   'https://www.iaai.com/Search',
+    'copart-us': 'https://www.copart.com/public/search',
+    'iaai-ca':   'https://ca.iaai.com/Search',
+    'copart-ca': 'https://www.copart.ca/public/search',
+    'progi-ca':  'https://autoauction.progi.com/',
+  };
+
+  const u = urls[site];
+  if (u) window.open(u, '_blank', 'noopener');
+}
+</script>
+</body>
+</html>

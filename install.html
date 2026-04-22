@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <title>Instalacja — MrFrik Rozliczenie</title>
+  <script src="//api.bitrix24.com/api/v1/"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 40px; text-align: center; color: #333; }
+    h1 { font-size: 20px; margin-bottom: 20px; }
+    #status { font-size: 14px; color: #666; }
+    .ok { color: #34b251; }
+    .err { color: #e53935; }
+  </style>
+</head>
+<body>
+<h1>MrFrik — Rozliczenie transakcji</h1>
+<div id="status">Instalacja...</div>
+
+<script>
+BX24.init(function() {
+
+  // ================================================================
+  //  KONFIGURACJA PLACEMENTÓW
+  //  Zmień BASE_URL na adres, gdzie hostujesz pliki
+  // ================================================================
+  // TODO: podmień na publiczny URL hostingu plików zakładki
+  var BASE_URL = 'https://TWOJ-HOSTING.example.com/frik';
+
+  var placements = [
+    {
+      placement: 'CRM_DEAL_DETAIL_TAB',
+      handler:   BASE_URL + '/zakladka-rozliczenie.html',
+      title:     'Rozliczenie'
+    },
+    {
+      placement: 'CRM_DEAL_DETAIL_TAB',
+      handler:   BASE_URL + '/zakladka-szukaj.html',
+      title:     'Szukaj aut'
+    },
+    {
+      placement: 'CRM_QUOTE_DETAIL_TAB',
+      handler:   BASE_URL + '/zakladka-oferta.html',
+      title:     'Wprowadź dane auta'
+    }
+  ];
+
+  // ================================================================
+  //  SMART DIFF — dodaje/aktualizuje/usuwa tylko to co trzeba
+  // ================================================================
+  var statusEl = document.getElementById('status');
+
+  BX24.callMethod('placement.get', {}, function(result) {
+    if (result.error()) {
+      statusEl.innerHTML = '<span class="err">Błąd pobierania placementów: ' + result.error() + '</span>';
+      BX24.installFinish();
+      return;
+    }
+
+    var existing = result.data();
+    var existingMap = {};
+    existing.forEach(function(item) {
+      existingMap[item.placement + '|' + item.handler] = item.title;
+    });
+
+    var configMap = {};
+    placements.forEach(function(c) {
+      configMap[c.placement + '|' + c.handler] = true;
+    });
+
+    var toAdd = [], toUpdate = [], toRemove = [];
+
+    placements.forEach(function(config) {
+      var key = config.placement + '|' + config.handler;
+      if (!(key in existingMap))                    toAdd.push(config);
+      else if (existingMap[key] !== config.title)   toUpdate.push(config);
+    });
+
+    existing.forEach(function(item) {
+      if (!(item.placement + '|' + item.handler in configMap)) {
+        toRemove.push(item);
+      }
+    });
+
+    var total = toAdd.length + toUpdate.length + toRemove.length;
+    if (total === 0) {
+      statusEl.innerHTML = '<span class="ok">✓ Wszystko aktualne, brak zmian.</span>';
+      BX24.installFinish();
+      return;
+    }
+
+    var completed = 0;
+    var errors = [];
+
+    function check() {
+      completed++;
+      if (completed === total) {
+        if (errors.length > 0) {
+          statusEl.innerHTML = '<span class="err">Błędy: ' + errors.join(', ') + '</span>';
+        } else {
+          statusEl.innerHTML = '<span class="ok">✓ Zakładki zainstalowane! Tworzę pole "Poziom dopasowania"…</span>';
+          createPoziomField();
+        }
+        if (errors.length > 0) BX24.installFinish();
+      }
+    }
+
+    toAdd.forEach(function(p) {
+      BX24.callMethod('placement.bind', p, function(r) {
+        if (r.error()) errors.push('bind: ' + r.error());
+        check();
+      });
+    });
+
+    toUpdate.forEach(function(p) {
+      BX24.callMethod('placement.unbind', { placement: p.placement, handler: p.handler }, function() {
+        BX24.callMethod('placement.bind', p, function(r) {
+          if (r.error()) errors.push('update: ' + r.error());
+          check();
+        });
+      });
+    });
+
+    toRemove.forEach(function(item) {
+      BX24.callMethod('placement.unbind', { placement: item.placement, handler: item.handler }, function(r) {
+        if (r.error()) errors.push('unbind: ' + r.error());
+        check();
+      });
+    });
+  });
+
+  // ================================================================
+  //  TWORZENIE POLA "Poziom dopasowania (systemowe)" w encji Oferta
+  //  Uruchamiane po udanej instalacji zakładek.
+  //  Sprawdza najpierw czy pole już istnieje (bezpieczne przy reinstalacji).
+  // ================================================================
+  function createPoziomField() {
+    // Najpierw sprawdź czy pole już istnieje
+    BX24.callMethod('crm.quote.userfield.list', {
+      filter: { XML_ID: 'FRIK_POZIOM_DOPASOWANIA' }
+    }, function(checkResult) {
+      if (!checkResult.error() && checkResult.data() && checkResult.data().length > 0) {
+        statusEl.innerHTML = '<span class="ok">✓ Instalacja zakończona! (pole "Poziom dopasowania" już istnieje)</span>';
+        BX24.installFinish();
+        return;
+      }
+
+      // Pole nie istnieje — utwórz je
+      BX24.callMethod('crm.quote.userfield.add', {
+        fields: {
+          FIELD_NAME:      'FRIK_POZIOM',
+          XML_ID:          'FRIK_POZIOM_DOPASOWANIA',
+          USER_TYPE_ID:    'enumeration',
+          MULTIPLE:        'N',
+          MANDATORY:       'N',
+          EDIT_FORM_LABEL: { pl: 'Poziom dopasowania (systemowe)', en: 'Match level (system)' },
+          LIST_COLUMN_LABEL: { pl: 'Poziom dopasowania', en: 'Match level' },
+          LIST_FILTER_LABEL: { pl: 'Poziom dopasowania', en: 'Match level' },
+          LIST: {
+            n0: { VALUE: 'Spełniające wymagania', SORT: '10', DEF: 'N', XML_ID: 'spelniajace' },
+            n1: { VALUE: 'Warte uwagi',           SORT: '20', DEF: 'N', XML_ID: 'warte'       },
+            n2: { VALUE: 'Inne',                  SORT: '30', DEF: 'N', XML_ID: 'inne'        }
+          }
+        }
+      }, function(fieldResult) {
+        if (fieldResult.error()) {
+          // Metoda może nie być dostępna — zainstaluj bez pola, nie blokuj
+          statusEl.innerHTML = '<span class="ok">✓ Instalacja zakończona!</span>' +
+            '<br><span style="font-size:12px;color:#888">Uwaga: pole "Poziom dopasowania" nie zostało utworzone automatycznie (' +
+            fieldResult.error() + '). Możesz dodać je ręcznie w ustawieniach Bitrix24.</span>';
+        } else {
+          statusEl.innerHTML = '<span class="ok">✓ Instalacja zakończona! Pole "Poziom dopasowania" utworzone ✓</span>';
+        }
+        BX24.installFinish();
+      });
+    });
+  }
+
+});
+</script>
+</body>
+</html>

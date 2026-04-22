@@ -200,6 +200,12 @@
       d.runDrive    ? `Czy jeździ: ${d.runDrive}`                 : null,
       '',
       d.location    ? `Lokalizacja: ${d.location}`                : null,
+      d.locationMeta && d.locationMeta.country
+        ? `Kraj (kod): ${d.locationMeta.country}` : null,
+      d.locationMeta && d.locationMeta.region
+        ? `Region: ${d.locationMeta.region}` : null,
+      d.locationMeta && d.locationMeta.taxRegime
+        ? `Reżim podatkowy: ${d.locationMeta.taxRegime}` : null,
       d.saleDate    ? `Data licytacji: ${d.saleDate}`             : null,
       d.estimatedValue
         ? `Szacowana wartość: $${d.estimatedValue.toLocaleString('en')} ${valLbl}` : null,
@@ -235,7 +241,7 @@
     const imgs = images.slice(0, 10)
       .map(u => `<img src="${u}" style="max-width:220px;margin:3px;border-radius:4px;display:inline-block">`)
       .join('');
-    await fetch(whBase + '/crm.timeline.comment.add', {
+    await fetch(whBase + '/crm.timeline.comment.add.json', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({
@@ -260,7 +266,7 @@
     }
     const wh = await getWebhookBase();
 
-    const resp = await fetch(wh + '/crm.deal.list', {
+    const resp = await fetch(wh + '/crm.deal.list.json', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({
@@ -269,10 +275,19 @@
         start:  0,
       }),
     });
-    const json = await resp.json();
-    if (json.error) throw new Error(json.error_description || json.error);
+    const dealText = await resp.text();
+    let dealJson;
+    try {
+      dealJson = JSON.parse(dealText);
+    } catch (_) {
+      throw new Error(!resp.ok ? `HTTP ${resp.status}` : 'Niepoprawna odpowiedź Bitrix (deal.list)');
+    }
+    if (!resp.ok) {
+      throw new Error(dealJson.error_description || dealJson.error || `HTTP ${resp.status}`);
+    }
+    if (dealJson.error) throw new Error(dealJson.error_description || dealJson.error);
 
-    const deals = json.result || [];
+    const deals = dealJson.result || [];
 
     // Batch-fetch contact and company names
     const contactIds = [...new Set(deals.map(d => d.CONTACT_ID).filter(Boolean))].slice(0, 25);
@@ -289,7 +304,7 @@
     const companyMap = {};
     if (Object.keys(batchCmds).length > 0) {
       try {
-        const bResp = await fetch(wh + '/batch', {
+        const bResp = await fetch(wh + '/batch.json', {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
           body:    JSON.stringify({ halt: 0, cmd: batchCmds }),
@@ -326,7 +341,6 @@
       || [data.year, data.make, data.model].filter(Boolean).join(' ')
       || 'Auto z aukcji';
 
-    const loc = data.locationMeta || FrikAuctionSources.parseLocation(data.location || '', sourceConfig);
     const cur = data.currency || 'USD';
 
     const fields = {
@@ -340,34 +354,34 @@
     if (contactId) fields.CONTACT_ID = parseInt(contactId, 10);
     if (companyId) fields.COMPANY_ID = parseInt(companyId, 10);
 
+    // Szacunkowa wartość — tylko standardowe pole Bitrix (UF z innego portalu = HTTP 400).
     if (data.estimatedValue) {
-      fields.OPPORTUNITY  = data.estimatedValue;
-      fields['UF_CRM_QUOTE_1749798603485'] = {
-        VALUE: String(data.estimatedValue), CURRENCY: cur,
-      };
+      fields.OPPORTUNITY = data.estimatedValue;
     }
-    if (sourceConfig.sourceEnum != null) {
-      fields['UF_CRM_QUOTE_1775199244953'] = sourceConfig.sourceEnum;
-    }
-    if (loc && loc.country) fields['UF_CRM_QUOTE_COUNTRY'] = loc.country;
-    if (loc && loc.region) fields['UF_CRM_QUOTE_PROVINCE'] = loc.region;
-    if (loc && loc.taxRegime) fields['UF_CRM_QUOTE_TAX_REGIME'] = loc.taxRegime;
-    if (data.vin) fields['UF_CRM_QUOTE_VIN'] = data.vin;
-    if (data.lotNumber) fields['UF_CRM_QUOTE_LOT_NUMBER'] = String(data.lotNumber);
 
+    // Kraj / region / VIN / lot są w COMMENTS (buildComments) — nie wysyłamy sztywnych UF_CRM_*
+    // z obcej instancji; pole „Poziom dopasowania” tylko jeśli znaleziono po XML_ID w portalu.
     if (poziomEnumId && cachedFieldName) {
       fields[cachedFieldName] = poziomEnumId;
     }
 
-    const endpoint = wh + '/crm.quote.add';
+    const endpoint = wh + '/crm.quote.add.json';
     const resp = await fetch(endpoint, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ fields }),
     });
 
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const json = await resp.json();
+    const raw = await resp.text();
+    let json;
+    try {
+      json = JSON.parse(raw);
+    } catch (_) {
+      throw new Error(!resp.ok ? `HTTP ${resp.status}: ${raw.slice(0, 160)}` : 'Niepoprawna odpowiedź Bitrix');
+    }
+    if (!resp.ok) {
+      throw new Error(json.error_description || json.error || `HTTP ${resp.status}`);
+    }
     if (json.error) throw new Error(json.error_description || json.error);
 
     const quoteId = json.result;

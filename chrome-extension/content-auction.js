@@ -25,13 +25,17 @@
   function isDetailPage() {
     const path = location.pathname.toLowerCase();
     if (sourceConfig.id === 'IAAI_US' || sourceConfig.id === 'IAAI_CA') {
-      return path.includes('/vehicledetail/');
+      // US: często /vehicledetails/… ; CA: https://ca.iaai.com/vehicle-details/2952589 (myślnik)
+      return /\/vehicle[-_]?details?(\/|$)/i.test(path)
+        || path.includes('/vehicledetail/');
     }
     if (sourceConfig.id === 'COPART_US' || sourceConfig.id === 'COPART_CA') {
       const hash = (location.hash || '').toLowerCase();
+      const href = (location.href || '').toLowerCase();
       // SPA / locale: czasem numer lotu tylko w hash; ścieżka musi zawierać /lot/ + cyfry
-      if (/\/lot\/\d/.test(path) || /\/lot\/\d/.test(hash)) return true;
+      if (/\/lot\/\d/.test(path) || /\/lot\/\d/.test(hash) || /\/lot\/\d/.test(href)) return true;
       if (path.includes('/lot/') && /\d/.test(path.split('/lot/')[1] || '')) return true;
+      if (/\/lotdetails?\/\d/i.test(path) || /\/lotdetails?\/\d/i.test(hash)) return true;
       return false;
     }
     if (sourceConfig.id === 'PROGI_CA') {
@@ -64,6 +68,216 @@
     return { odometerKm, odometerMi, odometer };
   }
 
+  function firstUrlFromSrcset(attr) {
+    if (!attr || typeof attr !== 'string') return null;
+    const part = attr.split(',')[0].trim();
+    if (!part) return null;
+    const u = part.split(/\s+/)[0];
+    return /^https?:\/\//i.test(u) ? u : null;
+  }
+
+  function imageUrlFromImg(img) {
+    if (!img || img.tagName !== 'IMG') return null;
+    const lazy = img.getAttribute('data-src')
+      || img.getAttribute('data-lazy-src')
+      || img.getAttribute('data-original')
+      || img.getAttribute('data-defer-src')
+      || img.getAttribute('data-url');
+    if (lazy) {
+      const t = lazy.trim().split(/[\s,]/)[0];
+      if (/^https?:\/\//i.test(t)) return t;
+    }
+    const fromDataSet = firstUrlFromSrcset(img.getAttribute('data-srcset') || img.getAttribute('data-lazy-srcset') || '');
+    if (fromDataSet) return fromDataSet;
+    if (img.currentSrc && /^https?:\/\//i.test(img.currentSrc)) return img.currentSrc;
+    const fromSet = firstUrlFromSrcset(img.getAttribute('srcset') || '');
+    if (fromSet) return fromSet;
+    if (img.src && /^https?:\/\//i.test(img.src)) return img.src;
+    return null;
+  }
+
+  function imageUrlFromSource(el) {
+    if (!el || el.tagName !== 'SOURCE') return null;
+    return firstUrlFromSrcset(el.getAttribute('srcset') || '');
+  }
+
+  /** IAAI: numer stocku / inventory z URL (np. vehicle-details/2952589, VehicleDetail/45184893~US). */
+  function iaaiStockIdFromLocation() {
+    const href = location.href || '';
+    const m = href.match(/\/vehicle[-_]?details?\/(\d+)/i)
+      || href.match(/\/vehicledetail\/(\d+)/i);
+    return m ? m[1] : null;
+  }
+
+  function iaaiResizerFromImageKey(key) {
+    if (!key || typeof key !== 'string') return null;
+    const k = key.trim();
+    if (!k) return null;
+    const enc = encodeURIComponent(k).replace(/%7E/gi, '~');
+    return 'https://vis.iaai.com/resizer?imageKeys=' + enc + '&width=1200&height=900';
+  }
+
+  function parseDimensionsAllImageKeysAttr(raw) {
+    if (!raw || typeof raw !== 'string') return [];
+    try {
+      const arr = JSON.parse(raw.replace(/&quot;/g, '"').trim());
+      return Array.isArray(arr) ? arr : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function iaaiImageKeysMatchStock(url, stockId) {
+    if (!stockId) return true;
+    const sid = String(stockId).toUpperCase();
+    const prefix = sid + '~';
+    try {
+      const sp = new URL(url).searchParams;
+      const raw = sp.get('imageKeys') || sp.get('imagekeys');
+      if (!raw) return false;
+      const dec = decodeURIComponent(String(raw).replace(/\+/g, ' '));
+      return dec.toUpperCase().startsWith(prefix);
+    } catch (_) {
+      const m = String(url).match(/[?&]imagekeys?=([^&#]+)/i);
+      if (!m) return false;
+      try {
+        const dec = decodeURIComponent(m[1]);
+        return dec.toUpperCase().startsWith(prefix);
+      } catch (_) {
+        return false;
+      }
+    }
+  }
+
+  /** Z atrybutów dimensionsAllImageKeys / dimensionsimagekey — tylko klucze zgodne ze stockiem z URL. */
+  function collectIaaiStructuredImages(stockId) {
+    const out = [];
+    const seen = new Set();
+    const normStock = stockId ? String(stockId).trim() : '';
+
+    function keyMatchesStock(k) {
+      if (!normStock) return true;
+      return String(k).toUpperCase().startsWith(normStock.toUpperCase() + '~');
+    }
+
+    function pushKey(k) {
+      if (!k || !keyMatchesStock(k)) return;
+      const u = iaaiResizerFromImageKey(k);
+      if (!u || seen.has(u)) return;
+      seen.add(u);
+      out.push(u);
+    }
+
+    if (normStock) {
+      document.querySelectorAll('[dimensionsAllImageKeys], [dimensionsallimagekeys]').forEach(el => {
+        const raw = el.getAttribute('dimensionsAllImageKeys') || el.getAttribute('dimensionsallimagekeys');
+        parseDimensionsAllImageKeysAttr(raw).forEach(row => {
+          const k = row && (row.k || row.K);
+          if (k) pushKey(k);
+        });
+      });
+    }
+
+    const fv = document.getElementById('fullViewImg')
+      || document.querySelector('img[dimensionsimagekey], img[dimensionsImageKey]');
+    if (fv) {
+      const rawFv = fv.getAttribute('dimensionsAllImageKeys') || fv.getAttribute('dimensionsallimagekeys');
+      if (rawFv) {
+        parseDimensionsAllImageKeysAttr(rawFv).forEach(row => {
+          const k = row && (row.k || row.K);
+          if (k && keyMatchesStock(k)) pushKey(k);
+        });
+      }
+      const k0 = fv.getAttribute('dimensionsimagekey') || fv.getAttribute('dimensionsImageKey');
+      if (k0 && keyMatchesStock(k0)) pushKey(k0);
+    }
+
+    return out;
+  }
+
+  function isRelevantAuctionImageUrl(url, sc) {
+    const s = String(url).split('#')[0];
+    const sl = s.toLowerCase();
+    if (!/^https:/i.test(s) || /data:/i.test(sl)) return false;
+    if (/\.svg(\?|#|$|&)/i.test(sl)) return false;
+    if (/logo|icon|sprite|favicon|placeholder|avatar|badge|banner|pixel|spacer|thumb-nav|nav-|social|payment|card-/.test(sl)) {
+      return false;
+    }
+    if (/(^|\/)content\/[^?#]*\.svg/i.test(sl) && /copart\.(com|ca)/i.test(sl)) return false;
+
+    const looksFile = /\.(jpe?g|webp|png)(\?|&|$|#)/i.test(sl);
+    const looksPath = /\/(image|img|media|photo|vehicle|lot|picture|lotimage|webi)\b/i.test(sl);
+    const looksIaaiResizer = /vis\.iaai\.com\/resizer/i.test(sl) && /[?&]imagekeys?=/i.test(sl);
+    const looksCopartLot = /(lotimage|csx-images|cf-\d+\.copart|\/vehicleimg\/|\/getimage\/|g2\.copart|eservices\.copart)/i.test(sl);
+
+    if (!looksFile && !looksPath && !looksIaaiResizer && !looksCopartLot) return false;
+
+    try {
+      const h = new URL(s).hostname.toLowerCase().replace(/^www\./, '');
+      const page = location.hostname.toLowerCase().replace(/^www\./, '');
+      const sameHost = h === page || h.endsWith('.' + page) || page.endsWith('.' + h);
+      if (sameHost) {
+        if (looksIaaiResizer) return true;
+        if (looksFile) return true;
+        if (looksCopartLot && !/\/content\//i.test(sl)) return true;
+        if (looksCopartLot && /\.(jpe?g|webp|png)(\?|&|$)/i.test(sl)) return true;
+        return false;
+      }
+    } catch (_) {}
+    if (sc.id && String(sc.id).startsWith('IAAI')) {
+      if (looksIaaiResizer) return true;
+      return /iaai|csx-|cs\.|vis\.|cache|akamai|cloudfront|azure|fastly|edge|image/i.test(sl);
+    }
+    if (sc.id && String(sc.id).startsWith('COPART')) {
+      if (/\/content\//i.test(sl) && !looksFile) return false;
+      return /copart|g2|cf-|csx|cdn|akamai|cloudfront|azure|fastly|edge|lotimage|img\.|eservices\.copart/i.test(sl);
+    }
+    return /iaai|copart|progi|cdn|images|cloudfront|azureedge/i.test(sl);
+  }
+
+  function collectStandardVehicleImages() {
+    const out = [];
+    const seen = new Set();
+    const isIAAI = sourceConfig.id === 'IAAI_US' || sourceConfig.id === 'IAAI_CA';
+    const stockId = isIAAI ? iaaiStockIdFromLocation() : null;
+
+    if (isIAAI) {
+      collectIaaiStructuredImages(stockId).forEach(u => {
+        if (seen.has(u)) return;
+        seen.add(u);
+        out.push(u);
+      });
+    }
+
+    const sel = [
+      'picture source[srcset]',
+      'img[data-src]',
+      'img[data-lazy-src]',
+      'img[data-original]',
+      'img[srcset]',
+      'img[src]',
+    ];
+    const els = [];
+    sel.forEach(q => { document.querySelectorAll(q).forEach(el => els.push(el)); });
+    for (let i = 0; i < els.length; i++) {
+      const el = els[i];
+      let u = null;
+      if (el.tagName === 'IMG') u = imageUrlFromImg(el);
+      else if (el.tagName === 'SOURCE') u = imageUrlFromSource(el);
+      if (!u) continue;
+      u = u.split('#')[0];
+      if (isIAAI && stockId && /vis\.iaai\.com\/resizer/i.test(u)) {
+        if (!iaaiImageKeysMatchStock(u, stockId)) continue;
+      }
+      if (!isRelevantAuctionImageUrl(u, sourceConfig)) continue;
+      if (seen.has(u)) continue;
+      seen.add(u);
+      out.push(u);
+      if (out.length >= 12) break;
+    }
+    return out.slice(0, 10);
+  }
+
   function extractStandard() {
     const text = document.body ? document.body.innerText : '';
     const isIAAI = sourceConfig.id === 'IAAI_US' || sourceConfig.id === 'IAAI_CA';
@@ -86,9 +300,12 @@
       }
     }
 
-    const lotFromUrl  = location.href.match(
-      isIAAI ? /\/vehicledetail\/(\d+)/i : /\/lot\/(\d+)/i,
-    );
+    const lotFromUrl = isIAAI
+      ? (() => {
+        const id = iaaiStockIdFromLocation();
+        return id ? [null, id] : null;
+      })()
+      : location.href.match(/\/lot\/(\d+)/i);
     const lotFromText = text.match(/\bLot[:\s#]*(\d{5,10})\b/i);
     const lotNumber   = lotFromUrl ? lotFromUrl[1] : (lotFromText ? lotFromText[1] : null);
 
@@ -108,12 +325,7 @@
       || text.match(/Actual Cash.*?Value[:\s]*\$?([\d,]+)/i);
     const estimatedValue = evM ? parseInt(evM[1].replace(/,/g, ''), 10) : null;
 
-    const imgEls = Array.from(document.querySelectorAll('img[src]'));
-    const images = imgEls
-      .map(img => img.src)
-      .filter(src => /iaai|copart|progi|cdn|images/i.test(src) && !/logo|pixel|placeholder/i.test(src))
-      .filter((v, i, a) => a.indexOf(v) === i)
-      .slice(0, 10);
+    const images = collectStandardVehicleImages();
 
     const cleanUrl = location.href.split('?')[0];
     return {
@@ -464,6 +676,7 @@
   </svg>`;
 
   function injectFab() {
+    if (!document.body) return;
     if (document.getElementById(FAB_ID)) return;
     const fab = document.createElement('button');
     fab.id    = FAB_ID;
@@ -704,15 +917,47 @@
     });
   }
 
-  // ── SPA navigation tracking ──────────────────────────────────────
-  let lastPath  = location.pathname;
+  // ── SPA navigation tracking (ścieżka + hash — Copart / IAAI bywa SPA) ──
+  function pathKey() {
+    return location.pathname + '\n' + (location.hash || '');
+  }
+  let lastPath  = pathKey();
   let injectTid = null;
+  let fabPollTid = null;
+
+  function clearFabPoll() {
+    if (fabPollTid != null) {
+      clearInterval(fabPollTid);
+      fabPollTid = null;
+    }
+  }
+
+  /** Copart SPA / wolne body: kilkanaście prób FAB po wejściu na VDP. */
+  function scheduleFabPoll() {
+    if (fabPollTid != null) return;
+    let n = 0;
+    fabPollTid = setInterval(function () {
+      n += 1;
+      if (n > 50) {
+        clearFabPoll();
+        return;
+      }
+      if (!isDetailPage()) return;
+      if (document.getElementById(FAB_ID)) {
+        clearFabPoll();
+        return;
+      }
+      injectFab();
+    }, 400);
+  }
 
   function onNavigate() {
     if (injectTid) clearTimeout(injectTid);
+    clearFabPoll();
     removeFab();
     if (isDetailPage()) {
       injectTid = setTimeout(injectFab, 2500);
+      scheduleFabPoll();
     }
   }
 
@@ -720,18 +965,36 @@
     const original = history[method].bind(history);
     history[method] = function (...args) {
       const result = original(...args);
-      if (location.pathname !== lastPath) {
-        lastPath = location.pathname;
+      const pk = pathKey();
+      if (pk !== lastPath) {
+        lastPath = pk;
         onNavigate();
       }
       return result;
     };
   });
-  window.addEventListener('popstate', onNavigate);
+  window.addEventListener('popstate', function () {
+    lastPath = pathKey();
+    onNavigate();
+  });
 
   // ── Initial check ────────────────────────────────────────────────
   if (isDetailPage()) {
     setTimeout(injectFab, 2500);
+    scheduleFabPoll();
   }
+  // Gdy document_end był przed ustawieniem URL przez SPA / pełnym load
+  window.addEventListener('load', function () {
+    if (isDetailPage() && !document.getElementById(FAB_ID)) {
+      setTimeout(injectFab, 600);
+      scheduleFabPoll();
+    }
+  });
+  window.addEventListener('pageshow', function () {
+    if (isDetailPage() && !document.getElementById(FAB_ID)) {
+      setTimeout(injectFab, 800);
+      scheduleFabPoll();
+    }
+  });
 
 })();

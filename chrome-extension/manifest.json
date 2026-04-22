@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "MrFrik — Aukcje samochodowe",
   "short_name": "MrFrik",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "Twórz oferty Bitrix24 ze stron IAAI i Copart (USA i Kanada) oraz Progi — jednym kliknięciem.",
   "icons": {
     "16":  "icons/icon16.png",
@@ -32,7 +32,11 @@
   ],
   "content_scripts": [
     {
-      "matches": ["https://mrfrik.com/mrfrik/*"],
+      "matches": [
+        "https://mrfrik.com/mrfrik/*",
+        "https://*.bitrix24.pl/*",
+        "https://*.bitrix24.com/*"
+      ],
       "js": ["content-detect.js"],
       "run_at": "document_start",
       "all_frames": true

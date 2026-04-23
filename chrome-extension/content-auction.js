@@ -18,7 +18,7 @@
   const HOST   = location.hostname.replace(/^www\./, '');
   const sourceConfig = FrikAuctionSources.getSourceByHost(HOST);
   if (!sourceConfig) return;
-  try { console.info('[MrFrik] content-auction', '1.2.0'); } catch (_) {}
+  try { console.info('[MrFrik] content-auction', '1.2.1'); } catch (_) {}
   const ACCENT      = sourceConfig.fabColor;
   const ACCENT_DARK = sourceConfig.accentHover;
 
@@ -593,10 +593,21 @@
   }
 
   // ── Add photos as timeline comment (non-blocking) ─────────────────
+  function escapeAttr(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;');
+  }
+
   async function addPhotosComment(quoteId, images, whBase) {
     if (!images || !images.length) return;
     const imgs = images.slice(0, 10)
-      .map(u => `<img src="${u}" style="max-width:220px;margin:3px;border-radius:4px;display:inline-block">`)
+      .map(function (u) {
+        const src = escapeAttr(u);
+        return '<img referrerpolicy="no-referrer" src="' + src
+          + '" style="max-width:220px;margin:3px;border-radius:4px;display:inline-block" alt="">';
+      })
       .join('');
     await fetch(whBase + '/crm.timeline.comment.add.json', {
       method:  'POST',

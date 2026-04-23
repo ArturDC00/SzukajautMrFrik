@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "MrFrik — Aukcje samochodowe",
   "short_name": "MrFrik",
-  "version": "1.1.9",
+  "version": "1.2.0",
   "description": "Twórz oferty Bitrix24 ze stron IAAI i Copart (USA i Kanada) oraz Progi — jednym kliknięciem.",
   "icons": {
     "16":  "icons/icon16.png",
@@ -25,6 +25,8 @@
     "https://*.iaai.com/*",
     "https://ca.iaai.com/*",
     "https://*.copart.com/*",
+    "https://copart.com/*",
+    "https://www.copart.com/*",
     "https://*.copart.ca/*",
     "https://copart.ca/*",
     "https://*.progi.com/*",
@@ -49,13 +51,16 @@
         "https://*.iaai.com/*",
         "https://ca.iaai.com/*",
         "https://*.copart.com/*",
+        "https://copart.com/*",
+        "https://www.copart.com/*",
         "https://*.copart.ca/*",
         "https://copart.ca/*",
         "https://*.progi.com/*",
         "https://progi.com/*"
       ],
       "js": ["auction-sources.js", "content-auction.js"],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ],
   "background": {

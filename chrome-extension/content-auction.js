@@ -18,6 +18,7 @@
   const HOST   = location.hostname.replace(/^www\./, '');
   const sourceConfig = FrikAuctionSources.getSourceByHost(HOST);
   if (!sourceConfig) return;
+  try { console.info('[MrFrik] content-auction', '1.2.0'); } catch (_) {}
   const ACCENT      = sourceConfig.fabColor;
   const ACCENT_DARK = sourceConfig.accentHover;
 
@@ -104,6 +105,82 @@
     return firstUrlFromSrcset(el.getAttribute('srcset') || '');
   }
 
+  /** querySelectorAll + otwarte ShadowRoot (Angular / Copart). */
+  function queryAllDeep(root, selector) {
+    const results = [];
+    const seen = new Set();
+    function visit(r) {
+      if (!r || !r.querySelectorAll) return;
+      try {
+        r.querySelectorAll(selector).forEach(el => {
+          if (!seen.has(el)) {
+            seen.add(el);
+            results.push(el);
+          }
+        });
+        r.querySelectorAll('*').forEach(node => {
+          if (node.shadowRoot) visit(node.shadowRoot);
+        });
+      } catch (_) { /* np. zamknięty shadow */ }
+    }
+    visit(root || document);
+    return results;
+  }
+
+  /** Wszystkie sensowne URL-e z <img> (kolejność od „najbardziej jawnego” src). */
+  function allImageUrlsFromImg(img) {
+    if (!img || img.tagName !== 'IMG') return [];
+    const out = [];
+    const push = function (u) {
+      if (!u || typeof u !== 'string') return;
+      const t = u.trim().split(/[\s,]/)[0];
+      if (!/^https?:\/\//i.test(t)) return;
+      const clean = t.split('#')[0];
+      if (out.indexOf(clean) === -1) out.push(clean);
+    };
+    if (img.src) push(img.src);
+    if (img.currentSrc) push(img.currentSrc);
+    ['srcset', 'data-srcset', 'data-lazy-srcset'].forEach(function (a) {
+      const u = firstUrlFromSrcset(img.getAttribute(a) || '');
+      if (u) push(u);
+    });
+    ['data-src', 'data-lazy-src', 'data-original', 'data-defer-src', 'data-url'].forEach(function (a) {
+      const v = img.getAttribute(a);
+      if (v) push(v);
+    });
+    return out;
+  }
+
+  const RE_COPART_CDN = /cs\.copart\.com|g2\.copart\.com|cf-\d+\.copart\.com|lotimages?\.copart|\/lotimage\/|ids-c-prod|ids-n-prod|pdoc|csx-images|vehicleimg|getimage|image-services|wssimg/i;
+
+  function isCopartJunkUrl(u) {
+    const sl = String(u).toLowerCase();
+    if (/\.svg(\?|#|$|&)/i.test(sl)) return true;
+    if (/\/content\//i.test(sl) && /copart\.(com|ca)/i.test(sl)) return true;
+    return false;
+  }
+
+  /** Copart: wybierz URL z CDN, nie placeholder z data-src (/content/). */
+  function pickBestCopartImgUrl(img) {
+    const candidates = allImageUrlsFromImg(img);
+    let i;
+    for (i = 0; i < candidates.length; i++) {
+      const u = candidates[i];
+      const sl = u.toLowerCase();
+      if (isCopartJunkUrl(u)) continue;
+      if (!/\.(jpe?g|webp|png)(\?|&|$|#)/i.test(sl)) continue;
+      if (RE_COPART_CDN.test(sl)) return u;
+    }
+    for (i = 0; i < candidates.length; i++) {
+      const u = candidates[i];
+      const sl = u.toLowerCase();
+      if (isCopartJunkUrl(u)) continue;
+      if (!/\.(jpe?g|webp|png)(\?|&|$|#)/i.test(sl)) continue;
+      if (/copart\.(com|ca)/i.test(sl)) return u;
+    }
+    return null;
+  }
+
   /** IAAI: numer stocku / inventory z URL (np. vehicle-details/2952589, VehicleDetail/45184893~US). */
   function iaaiStockIdFromLocation() {
     const href = location.href || '';
@@ -172,7 +249,7 @@
     }
 
     if (normStock) {
-      document.querySelectorAll('[dimensionsAllImageKeys], [dimensionsallimagekeys]').forEach(el => {
+      queryAllDeep(document, '[dimensionsAllImageKeys], [dimensionsallimagekeys]').forEach(el => {
         const raw = el.getAttribute('dimensionsAllImageKeys') || el.getAttribute('dimensionsallimagekeys');
         parseDimensionsAllImageKeysAttr(raw).forEach(row => {
           const k = row && (row.k || row.K);
@@ -182,6 +259,7 @@
     }
 
     const fv = document.getElementById('fullViewImg')
+      || queryAllDeep(document, 'img[dimensionsimagekey], img[dimensionsImageKey]')[0]
       || document.querySelector('img[dimensionsimagekey], img[dimensionsImageKey]');
     if (fv) {
       const rawFv = fv.getAttribute('dimensionsAllImageKeys') || fv.getAttribute('dimensionsallimagekeys');
@@ -217,7 +295,7 @@
     const looksFile = /\.(jpe?g|webp|png)(\?|&|$|#)/i.test(sl);
     const looksPath = /\/(image|img|media|photo|vehicle|lot|picture|lotimage|webi)\b/i.test(sl);
     const looksIaaiResizer = /vis\.iaai\.com\/resizer/i.test(sl) && /[?&]imagekeys?=/i.test(sl);
-    const looksCopartLot = /(cs\.copart\.com|lotimage|csx-images|cf-\d+\.copart|\/vehicleimg\/|\/getimage\/|g2\.copart|eservices\.copart|ids-c-prod|ids-n-prod|pdoc)/i.test(sl);
+    const looksCopartLot = RE_COPART_CDN.test(sl);
 
     if (!looksFile && !looksPath && !looksIaaiResizer && !looksCopartLot) return false;
 
@@ -249,7 +327,6 @@
   function collectCopartCdnImages() {
     const out = [];
     const seen = new Set();
-    const reCdn = /cs\.copart\.com|g2\.copart\.com|cf-\d+\.copart\.com|lotimages?\.copart|\/lotimage\/|ids-c-prod|ids-n-prod|pdoc|csx-images|vehicleimg|getimage|image-services|wssimg/i;
     const sel = [
       'picture source[srcset]',
       'img[data-src]',
@@ -257,20 +334,24 @@
       'img[data-original]',
       'img[srcset]',
       'img[src]',
+      '#zoomImgElement',
+      'img.zoomImgElement',
     ];
     const els = [];
-    sel.forEach(q => { document.querySelectorAll(q).forEach(el => els.push(el)); });
+    sel.forEach(function (q) {
+      queryAllDeep(document, q).forEach(function (el) { els.push(el); });
+    });
     for (let i = 0; i < els.length; i++) {
       const el = els[i];
       let u = null;
-      if (el.tagName === 'IMG') u = imageUrlFromImg(el);
+      if (el.tagName === 'IMG') u = pickBestCopartImgUrl(el) || imageUrlFromImg(el);
       else if (el.tagName === 'SOURCE') u = imageUrlFromSource(el);
       if (!u) continue;
       u = u.split('#')[0];
       const sl = u.toLowerCase();
-      if (/\.svg/i.test(sl) || /\/content\//i.test(sl)) continue;
+      if (isCopartJunkUrl(u)) continue;
       if (!/\.(jpe?g|webp|png)(\?|&|$|#)/i.test(sl)) continue;
-      if (!reCdn.test(sl)) continue;
+      if (!RE_COPART_CDN.test(sl)) continue;
       if (seen.has(u)) continue;
       seen.add(u);
       out.push(u);
@@ -309,14 +390,21 @@
       'img[data-original]',
       'img[srcset]',
       'img[src]',
+      '#zoomImgElement',
+      'img.zoomImgElement',
     ];
     const els = [];
-    sel.forEach(q => { document.querySelectorAll(q).forEach(el => els.push(el)); });
+    sel.forEach(function (q) {
+      queryAllDeep(document, q).forEach(function (el) { els.push(el); });
+    });
     for (let i = 0; i < els.length; i++) {
       const el = els[i];
       let u = null;
-      if (el.tagName === 'IMG') u = imageUrlFromImg(el);
-      else if (el.tagName === 'SOURCE') u = imageUrlFromSource(el);
+      if (el.tagName === 'IMG') {
+        u = isCopart ? (pickBestCopartImgUrl(el) || imageUrlFromImg(el)) : imageUrlFromImg(el);
+      } else if (el.tagName === 'SOURCE') {
+        u = imageUrlFromSource(el);
+      }
       if (!u) continue;
       u = u.split('#')[0];
       if (isIAAI && stockId && /vis\.iaai\.com\/resizer/i.test(u)) {

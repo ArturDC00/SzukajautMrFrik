@@ -2406,6 +2406,18 @@ function formatBankAccountLineForDisplay(acct) {
   return String(acct);
 }
 
+function isSettlementBankPdfPlaceholder(bank) {
+  if (!bank) return true;
+  var rawAcct = bank.account || bank.accountNumber;
+  var acctStr = String(rawAcct || '');
+  if (!acctStr.trim()) return true;
+  if (/XXXX/i.test(acctStr)) return true;
+  if (!String(bank.bank || '').trim()) return true;
+  if (!String(bank.swift || '').trim()) return true;
+  if (!String(bank.name || '').trim()) return true;
+  return false;
+}
+
 function formatWireReference(template, stock, lot, buyer) {
   if (!template) return '';
   var b = buyer ? String(buyer) : '';
@@ -2433,18 +2445,20 @@ function buildSettlementBankHtml(bank, currency, paymentTitle, refForBank) {
 function buildSettlementWireCopyText(which) {
   if (!settlementLastCalc) return '';
   var L = settlementLastCalc;
-  var b = L.bank;
-  var amt = which === 1 ? L.transfer1 : L.transfer2;
-  var title = which === 1 ? L.wireTitle1 : L.wireTitle2;
+  var b = L.bank || getAuctionBankDetails(L.auctionHouse || 'iaai_ca');
+  var tr = which === 1 ? L.transfer1 : L.transfer2;
+  var amt = tr && typeof tr.amount === 'number' ? tr.amount : 0;
+  var title = tr && tr.title ? tr.title : '';
+  var ref = which === 1 ? (L.bankRef1 || L.bankRef || '') : (L.bankRef2 || L.bankRef || '');
   var lines = [];
   lines.push('Odbiorca: ' + b.name);
   lines.push('Kwota: ' + fmtSettleMoney(amt, L.currency));
   lines.push('Bank: ' + b.bank);
   lines.push('SWIFT: ' + b.swift);
-  lines.push('Numer konta: ' + formatBankAccountLineForDisplay(b.account));
+  lines.push('Numer konta: ' + formatBankAccountLineForDisplay(b.account || b.accountNumber));
   lines.push('Waluta: ' + L.currency);
   lines.push('Tytuł przelewu: ' + title);
-  lines.push('Referencja: ' + L.bankRef);
+  lines.push('Referencja: ' + ref);
   return lines.join('\n');
 }
 
@@ -2478,87 +2492,211 @@ function settlementCopyFallback(txt) {
   document.body.removeChild(ta);
 }
 
-function buildSettlementPrintDocument(L) {
+function buildSettlementPdfPrintHtml(L) {
+  var cur = L.currency || 'CAD';
+  var houseKey = L.auctionHouse || L.house || 'iaai_ca';
+  var bank = L.bank && L.bank.bank ? L.bank : getAuctionBankDetails(houseKey);
+  var tr1 = L.transfer1 && typeof L.transfer1 === 'object' ? L.transfer1 : { amount: Number(L.transfer1) || 0, title: '' };
+  var tr2 = L.transfer2 && typeof L.transfer2 === 'object' ? L.transfer2 : { amount: Number(L.transfer2) || 0, title: '' };
+  var t1Amt = typeof tr1.amount === 'number' ? tr1.amount : 0;
+  var t2Amt = typeof tr2.amount === 'number' ? tr2.amount : 0;
+  var ref1 = L.bankRef1 || L.bankRef || '';
+  var ref2 = L.bankRef2 || L.bankRef || '';
+  var now = new Date();
+  var dateHeader = now.toLocaleDateString('pl-PL');
+  var dateTimeFooter = now.toLocaleString('pl-PL', { dateStyle: 'long', timeStyle: 'short' });
   var logoBlock = '';
   if (AUTOMEEKKA_LOGO_PLACEHOLDER_URL) {
     var logoUrl = String(AUTOMEEKKA_LOGO_PLACEHOLDER_URL).replace(/"/g, '').replace(/'/g, '');
-    logoBlock = '<img class="logo" src="' + logoUrl + '" alt="Automekka">';
+    var logoUrlAttr = String(logoUrl).replace(/&/g, '&amp;');
+    logoBlock =
+      '<div class="logo-wrap">' +
+      '<img class="logo" src="' + logoUrlAttr + '" alt="" ' +
+      'onerror="this.style.display=\'none\';var n=this.nextElementSibling;if(n)n.style.display=\'block\';">' +
+      '<div class="logo-text logo-fallback" style="display:none;">AUTOMEKKA</div></div>';
   } else {
-    logoBlock = '<div class="logo-ph">Automekka</div>';
+    logoBlock = '<div class="logo-text">AUTOMEKKA</div>';
   }
-  var now = new Date();
-  var dateStr = now.toLocaleString('pl-PL', { dateStyle: 'long', timeStyle: 'short' });
-  var rowsHtml = '';
+  var saleWin = typeof L.saleGross === 'number' && !isNaN(L.saleGross) ? L.saleGross : t1Amt;
+  var bankPdfOk = !isSettlementBankPdfPlaceholder(bank);
+  var bankPdfPh = '[PLACEHOLDER: Uzupełnić dane banku w CONFIG]';
+
+  var vehRows = '';
+  if (L.stock) vehRows += '<tr><td class="lbl">Stock Number / Lot Number</td><td>' + escHtml(L.stock) + '</td></tr>';
+  if (L.vin) vehRows += '<tr><td class="lbl">VIN</td><td>' + escHtml(L.vin) + '</td></tr>';
+  if (L.buyerName && String(L.buyerName).trim()) {
+    vehRows += '<tr><td class="lbl">Kupujący (Buyer)</td><td>' + escHtml(String(L.buyerName).trim()) + '</td></tr>';
+  }
+  var ymm = [];
+  if (L.invYear) ymm.push(escHtml(String(L.invYear)));
+  if (L.invMake) ymm.push(escHtml(String(L.invMake)));
+  if (L.invModel) ymm.push(escHtml(String(L.invModel)));
+  if (ymm.length) vehRows += '<tr><td class="lbl">Rok / Marka / Model</td><td>' + ymm.join(' ') + '</td></tr>';
+  vehRows += '<tr><td class="lbl">Cena wygranej aukcji</td><td>' + escHtml(fmtPdfCurrency(saleWin, cur)) + '</td></tr>';
+
+  var feesSumPdf = typeof L.auctionFeesSum === 'number' && !isNaN(L.auctionFeesSum) ? L.auctionFeesSum : null;
+  if (feesSumPdf === null) {
+    feesSumPdf = Math.max(0, t2Amt - (Number(L.usTransportUsd) || 0));
+  }
+  var usTrPdf = Number(L.usTransportUsd) || 0;
+
+  var sumRows = '';
+  sumRows += '<tr><td>Sale Amount</td><td class="num">' + escHtml(fmtPdfDollarAmount(saleWin)) + '</td><td>' + escHtml(cur) + '</td></tr>';
+  if (feesSumPdf > 0.0001) {
+    sumRows += '<tr><td>Auction Fees</td><td class="num">' + escHtml(fmtPdfDollarAmount(feesSumPdf)) + '</td><td>' + escHtml(cur) + '</td></tr>';
+  }
+  if (usTrPdf > 0.0001) {
+    sumRows += '<tr><td>US Transport</td><td class="num">' + escHtml(fmtPdfDollarAmount(usTrPdf)) + '</td><td>USD</td></tr>';
+  }
+  sumRows += '<tr class="row-total"><td><strong>RAZEM</strong></td><td class="num"><strong>' + escHtml(fmtPdfDollarAmount(L.total)) + '</strong></td><td><strong>' + escHtml(cur) + '</strong></td></tr>';
+
+  var detailRows = '';
+  var li = L.lineItems || [];
   var ri;
-  for (ri = 0; ri < L.lineItems.length; ri++) {
-    var row = L.lineItems[ri];
-    rowsHtml += '<tr><td>' + escHtml(row.label) + '</td><td style="text-align:right;">' + escHtml(row.value) + '</td></tr>';
+  for (ri = 0; ri < li.length; ri++) {
+    var row = li[ri];
+    var kw = '';
+    var wal = cur;
+    if (row && typeof row.amount === 'number' && !isNaN(row.amount)) {
+      kw = fmtPdfDollarAmount(row.amount);
+      wal = String(row.currency || cur).toUpperCase();
+    } else if (row && row.value) {
+      kw = String(row.value);
+    }
+    var isTotal = row && /razem/i.test(String(row.label));
+    detailRows += '<tr' + (isTotal ? ' class="row-total"' : '') + '><td>' + escHtml(row ? row.label : '') + '</td><td class="num">' + escHtml(kw) + '</td><td>' + escHtml(wal) + '</td></tr>';
   }
-  var vehParts = [];
-  if (L.invYear) vehParts.push('Rok: ' + escHtml(L.invYear));
-  if (L.invMake) vehParts.push('Marka: ' + escHtml(L.invMake));
-  if (L.invModel) vehParts.push('Model: ' + escHtml(L.invModel));
-  if (L.vin) vehParts.push('VIN: ' + escHtml(L.vin));
-  if (L.stock) vehParts.push('Stock / Lot: ' + escHtml(L.stock));
-  var vehBlock = vehParts.length ? '<h2>Pojazd</h2><p>' + vehParts.join(' &nbsp;|&nbsp; ') + '</p>' : '';
+  if (!detailRows) {
+    detailRows = '<tr><td colspan="3">Brak pozycji szczegółowych</td></tr>';
+  }
 
-  var acct1 = formatBankAccountLineForDisplay(L.bank.account);
-  var style = 'body{font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#222;margin:24px;}h1{font-size:18px;}h2{font-size:14px;margin-top:18px;}table{border-collapse:collapse;width:100%;margin:10px 0;}th,td{border:1px solid #ccc;padding:6px;}th{background:#f0f4f8;}.logo{max-height:48px;}.logo-ph{font-size:22px;font-weight:bold;color:#0b66c2;margin-bottom:8px;}.wire{margin-top:14px;padding:10px;border:1px solid #ddd;border-radius:6px;background:#fafbfc;}.foot{margin-top:28px;font-size:10px;color:#666;border-top:1px solid #ddd;padding-top:10px;}';
+  var taxBlock = '';
+  if (L.taxDeductedSale && Number(L.taxDeductedSale) > 0) {
+    taxBlock = '<div class="tax-box"><strong>Podatek odliczony (Sale Tax Deduction):</strong> ' +
+      escHtml(fmtPdfCurrency(L.taxDeductedSale, cur)) + '</div>';
+  }
 
-  var doc = '<!DOCTYPE html><html lang="pl"><head><meta charset="UTF-8"><title>Rozliczenie — Automekka</title><style>' + style + '</style></head><body>';
-  doc += logoBlock;
-  doc += '<h1>Rozliczenie po aukcji</h1>';
-  doc += '<p><strong>Data wygenerowania:</strong> ' + escHtml(dateStr) + '</p>';
-  doc += vehBlock;
-  doc += '<h2>Tabela pozycji</h2><table><thead><tr><th>Pozycja</th><th>Kwota</th></tr></thead><tbody>' + rowsHtml + '</tbody></table>';
-  doc += '<h2>Przelew 1 — pojazd</h2><div class="wire"><p><strong>Kwota:</strong> ' + escHtml(fmtSettleMoney(L.transfer1, L.currency)) + '</p>';
-  doc += '<p><strong>Odbiorca:</strong> ' + escHtml(L.bank.name) + '</p>';
-  doc += '<p><strong>Bank / SWIFT:</strong> ' + escHtml(L.bank.bank) + ' / ' + escHtml(L.bank.swift) + '</p>';
-  doc += '<p><strong>Numer konta:</strong> ' + escHtml(acct1) + '</p>';
-  doc += '<p><strong>Tytuł przelewu:</strong> ' + escHtml(L.wireTitle1) + '</p>';
-  doc += '<p><strong>Referencja:</strong> ' + escHtml(L.bankRef) + '</p></div>';
-  doc += '<h2>Przelew 2 — opłaty aukcyjne</h2><div class="wire"><p><strong>Kwota:</strong> ' + escHtml(fmtSettleMoney(L.transfer2, L.currency)) + '</p>';
-  doc += '<p><strong>Odbiorca:</strong> ' + escHtml(L.bank.name) + '</p>';
-  doc += '<p><strong>Bank / SWIFT:</strong> ' + escHtml(L.bank.bank) + ' / ' + escHtml(L.bank.swift) + '</p>';
-  doc += '<p><strong>Numer konta:</strong> ' + escHtml(acct1) + '</p>';
-  doc += '<p><strong>Tytuł przelewu:</strong> ' + escHtml(L.wireTitle2) + '</p>';
-  doc += '<p><strong>Referencja:</strong> ' + escHtml(L.bankRef) + '</p></div>';
-  doc += '<p><strong>Deadline:</strong> Oba przelewy tego samego dnia roboczego.</p>';
-  doc += '<p class="foot">Wygenerowano automatycznie przez Automekka Settlement Calculator</p>';
+  var acct = formatBankAccountLineForDisplay(bank.account || bank.accountNumber);
+  function wireBlock(titleLabel, amount, wireTitle, bankRefStr) {
+    var h = '<div class="transfer-block wire"><h3>' + escHtml(titleLabel) + '</h3>';
+    h += '<p><strong>Tytuł przelewu:</strong> ' + escHtml(wireTitle) + '</p>';
+    h += '<p class="transfer-amount"><strong>Kwota:</strong> ' + escHtml(fmtPdfCurrency(amount, cur)) + '</p>';
+    h += '<p><strong>Waluta:</strong> ' + escHtml(cur) + '</p>';
+    if (!bankPdfOk) {
+      h += '<p><em>Szczegóły banku — zobacz komunikat powyżej.</em></p>';
+    } else {
+      h += '<p><strong>Bank:</strong> ' + escHtml(bank.bank) + '</p>';
+      h += '<p><strong>SWIFT:</strong> ' + escHtml(bank.swift) + '</p>';
+      h += '<p><strong>Account Number:</strong> ' + escHtml(acct) + '</p>';
+      h += '<p><strong>Address:</strong> ' + escHtml(bank.address) + '</p>';
+      h += '<p><strong>Odbiorca:</strong> ' + escHtml(bank.name) + '</p>';
+    }
+    h += '<p><strong>Reference / Title:</strong> ' + escHtml(bankRefStr) + '</p></div>';
+    return h;
+  }
+
+  var css =
+    '@page{margin:1cm;}' +
+    '@media print{' +
+    'body{margin:1cm;font-family:Arial,sans-serif;font-size:11px;color:#222;line-height:1.45;}' +
+    '.no-print{display:none!important;}' +
+    'table{width:100%;border-collapse:collapse;margin:10px 0;}' +
+    'table.sum th,table.sum td,table.veh td,table.veh th{border:1px solid #000;padding:8px;text-align:left;}' +
+    'table.sum td.num{text-align:right;}' +
+    '.settlement-header{text-align:center;font-weight:bold;font-size:16px;margin-bottom:20px;color:#0b3d6d;}' +
+    '.settlement-header h1{font-size:16px;margin:8px 0 0;}' +
+    '.settlement-section{margin-bottom:20px;page-break-inside:avoid;}' +
+    '.settlement-section h2{font-size:12px;margin:16px 0 6px;color:#0b3d6d;border-bottom:1px solid #94a3b8;padding-bottom:4px;}' +
+    '.transfer-block{border:1px solid #ccc;padding:15px;margin:10px 0;background:#fafbfc;}' +
+    '.transfer-amount{font-weight:bold;font-size:14px;}' +
+    '.footer,.foot{text-align:center;font-size:10px;margin-top:30px;border-top:1px solid #000;padding-top:10px;color:#334155;}' +
+    'img.logo{max-width:100px;margin-bottom:10px;height:auto;display:block;margin-left:auto;margin-right:auto;}' +
+    '.logo-text{font-size:20px;font-weight:bold;color:#0b66c2;margin-bottom:8px;}' +
+    '.hdr-date{text-align:center;font-weight:normal;font-size:11px;margin:6px 0 12px;color:#475569;}' +
+    'table.sum th{background:#e2e8f0;}' +
+    'table.sum tr.row-total td{background:#f1f5f9;}' +
+    'table.veh td.lbl{width:32%;background:#f8fafc;font-weight:bold;}' +
+    '.tax-box{margin:12px 0;padding:8px;border:1px solid #fcd34d;background:#fffbeb;}' +
+    '.bank-ph-global{margin:12px 0;padding:10px;border:2px solid #f97316;background:#fff7ed;}' +
+    '}' +
+    'body{font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#222;margin:1cm;line-height:1.45;}' +
+    'table.sum th,table.sum td,table.veh td{border:1px solid #94a3b8;padding:6px 8px;}' +
+    'table.sum td.num{text-align:right;}';
+
+  var doc = '<!DOCTYPE html><html lang="pl"><head><meta charset="UTF-8"><title>POTWIERDZENIE ROZLICZENIA</title><style>' + css + '</style></head><body>';
+  doc += '<div class="settlement-header">' + logoBlock;
+  doc += '<p class="hdr-date"><strong>Data:</strong> ' + escHtml(dateHeader) + '</p>';
+  doc += '<h1>POTWIERDZENIE ROZLICZENIA</h1></div>';
+  doc += '<div class="settlement-section"><h2>Pojazd</h2><table class="veh"><tbody>' + vehRows + '</tbody></table></div>';
+  doc += '<div class="settlement-section"><h2>Pozycje rozliczenia</h2>';
+  doc += '<table class="sum"><thead><tr><th>Pozycja</th><th>Kwota</th><th>Waluta</th></tr></thead><tbody>' + sumRows + '</tbody></table>';
+  doc += '<h3 style="font-size:11px;margin:14px 0 6px;color:#334155;">Szczegóły pozycji</h3>';
+  doc += '<table class="sum"><thead><tr><th>Pozycja</th><th>Kwota</th><th>Waluta</th></tr></thead><tbody>' + detailRows + '</tbody></table></div>';
+  doc += taxBlock;
+  if (!bankPdfOk) {
+    doc += '<div class="bank-ph-global"><strong>' + escHtml(bankPdfPh) + '</strong></div>';
+  }
+  doc += wireBlock('Przelew 1 (Sale Amount)', t1Amt, tr1.title || '', ref1);
+  doc += wireBlock('Przelew 2 (Fees + opcjonalnie transport)', t2Amt, tr2.title || '', ref2);
+  doc += '<p style="margin-top:14px;"><strong>Oba przelewy muszą zostać zrealizowane tego samego dnia roboczego.</strong></p>';
+  doc += '<div class="footer foot"><p>Wygenerowano automatycznie przez Automekka Settlement Calculator</p>';
+  doc += '<p>' + escHtml(dateTimeFooter) + '</p></div>';
   doc += '</body></html>';
   return doc;
 }
 
-function generateSettlementPdf() {
+function printSettlementPdf() {
   if (!settlementLastCalc) {
-    alert('Najpierw kliknij „Oblicz rozliczenie”.');
+    alert('Brak danych do wygenerowania PDF. Najpierw oblicz rozliczenie.');
     return;
   }
-  var docHtml = buildSettlementPrintDocument(settlementLastCalc);
-  var w = window.open('', '_blank');
-  if (!w) {
+  if (!hasSettlementPrintReady(settlementLastCalc)) {
+    alert('Brak danych do wygenerowania PDF. Najpierw oblicz rozliczenie.');
+    return;
+  }
+  var printWindow = window.open('', '_blank');
+  if (!printWindow) {
     alert('Zezwól na wyskakujące okno, aby wydrukować / zapisać jako PDF.');
     return;
   }
-  w.document.open();
-  w.document.write(docHtml);
-  w.document.close();
+  var docHtml = buildSettlementPdfPrintHtml(settlementLastCalc);
+  printWindow.document.open();
+  printWindow.document.write(docHtml);
+  printWindow.document.close();
+  var closed = false;
+  function closeOnce() {
+    if (closed) return;
+    closed = true;
+    try {
+      printWindow.close();
+    } catch (eClose) {}
+  }
+  if ('onafterprint' in printWindow) {
+    printWindow.onafterprint = closeOnce;
+  } else {
+    setTimeout(closeOnce, 4000);
+  }
+  setTimeout(closeOnce, 45000);
   setTimeout(function() {
     try {
-      w.focus();
-      w.print();
-    } catch (e1) {}
-  }, 350);
+      printWindow.focus();
+      printWindow.print();
+    } catch (ePrint) {}
+  }, 250);
+}
+
+function generateSettlementPdf() {
+  printSettlementPdf();
 }
 
 function bindSettlementResultButtons() {
   var c1 = document.getElementById('settleCopyWire1');
   var c2 = document.getElementById('settleCopyWire2');
-  var gp = document.getElementById('settleGenPdfBtn');
+  var gp = document.getElementById('settlePrintPdfBtn');
   var sv = document.getElementById('settleSaveBitrixBtn');
   if (c1) c1.onclick = function() { copySettlementWire(1); };
   if (c2) c2.onclick = function() { copySettlementWire(2); };
-  if (gp) gp.onclick = function() { generateSettlementPdf(); };
+  if (gp) gp.onclick = function() { printSettlementPdf(); };
   if (sv) sv.onclick = function() { saveSettlementToBitrix(); };
 }
 
@@ -2568,16 +2706,22 @@ function hasSettlementDealContext() {
 
 function buildSettlementResultsCardHtml(L, refEsc, hasDealContext) {
   var cur = L.currency;
-  var bankBlock1 = buildSettlementBankHtml(L.bank, cur, L.wireTitle1, L.bankRef);
-  var bankBlock2 = buildSettlementBankHtml(L.bank, cur, L.wireTitle2, L.bankRef);
+  var tr1 = L.transfer1 && typeof L.transfer1 === 'object' ? L.transfer1 : { amount: Number(L.transfer1) || 0, title: '' };
+  var tr2 = L.transfer2 && typeof L.transfer2 === 'object' ? L.transfer2 : { amount: Number(L.transfer2) || 0, title: '' };
+  var t1Amt = typeof tr1.amount === 'number' ? tr1.amount : 0;
+  var t2Amt = typeof tr2.amount === 'number' ? tr2.amount : 0;
+  var ref1 = L.bankRef1 || L.bankRef || '';
+  var ref2 = L.bankRef2 || L.bankRef || '';
+  var bankBlock1 = buildSettlementBankHtml(L.bank, cur, tr1.title || '', ref1);
+  var bankBlock2 = buildSettlementBankHtml(L.bank, cur, tr2.title || '', ref2);
   var html = '';
   html += '<div class="card" style="margin-top:10px;max-width:720px;">';
   html += '<h3 style="font-size:12px;text-transform:uppercase;color:var(--blue-dark);margin-bottom:8px;">Wynik</h3>';
-  html += '<div class="rbox" style="margin-top:0;"><div class="rl">Przelew 1</div><div class="rv">' + fmtSettleMoney(L.transfer1, cur) + '</div>';
-  html += '<div class="hint" style="margin-top:6px;">Payment for vehicle - ' + refEsc + '</div>';
+  html += '<div class="rbox" style="margin-top:0;"><div class="rl">Przelew 1</div><div class="rv">' + fmtSettleMoney(t1Amt, cur) + '</div>';
+  html += '<div class="hint" style="margin-top:6px;">' + escHtml(tr1.title || ('Payment for vehicle - ' + refEsc)) + '</div>';
   html += bankBlock1 + '</div>';
-  html += '<div class="rbox orange" style="margin-top:8px;"><div class="rl">Przelew 2</div><div class="rv">' + fmtSettleMoney(L.transfer2, cur) + '</div>';
-  html += '<div class="hint" style="margin-top:6px;">Payment for auction fees - ' + refEsc + '</div>';
+  html += '<div class="rbox orange" style="margin-top:8px;"><div class="rl">Przelew 2</div><div class="rv">' + fmtSettleMoney(t2Amt, cur) + '</div>';
+  html += '<div class="hint" style="margin-top:6px;">' + escHtml(tr2.title || ('Payment for auction fees - ' + refEsc)) + '</div>';
   html += bankBlock2 + '</div>';
   html += '<div class="total-rbox" style="margin-top:10px;"><div class="rl">Razem (oba przelewy)</div><div class="rv">' + fmtSettleMoney(L.total, cur) + '</div></div>';
   html += '<p class="hint" style="margin-top:10px;">' + escHtml(L.infoZwrot) + '</p>';
@@ -2585,7 +2729,9 @@ function buildSettlementResultsCardHtml(L, refEsc, hasDealContext) {
   html += '<p style="margin-top:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">';
   html += '<button type="button" class="btn-sm secondary" id="settleCopyWire1">Kopiuj dane przelewu 1</button>';
   html += '<button type="button" class="btn-sm secondary" id="settleCopyWire2">Kopiuj dane przelewu 2</button>';
-  html += '<button type="button" class="btn-sm" id="settleGenPdfBtn">Generuj PDF rozliczenia</button>';
+  html += '<button type="button" class="btn-sm" id="settlePrintPdfBtn"' +
+    (hasSettlementPrintReady(L) ? '' : ' style="display:none;"') +
+    '>Generuj PDF rozliczenia</button>';
   if (hasDealContext) {
     html += '<button type="button" class="btn-sm" id="settleSaveBitrixBtn">Zapisz rozliczenie do dealu</button>';
     html += '<span id="settleBitrixSaveHint" class="hint" style="margin-left:4px;"></span>';
@@ -2618,12 +2764,12 @@ function saveSettlementToBitrix() {
   var L = settlementLastCalc;
   var fields = {};
   fields[CONFIG.DEAL_SETTLEMENT_TOTAL_FIELD] = L.total;
-  fields[CONFIG.DEAL_SETTLEMENT_TRANSFER_1_FIELD] = L.transfer1;
-  fields[CONFIG.DEAL_SETTLEMENT_TRANSFER_2_FIELD] = L.transfer2;
+  fields[CONFIG.DEAL_SETTLEMENT_TRANSFER_1_FIELD] = L.transfer1 && typeof L.transfer1.amount === 'number' ? L.transfer1.amount : L.transfer1;
+  fields[CONFIG.DEAL_SETTLEMENT_TRANSFER_2_FIELD] = L.transfer2 && typeof L.transfer2.amount === 'number' ? L.transfer2.amount : L.transfer2;
   fields[CONFIG.DEAL_SETTLEMENT_CURRENCY_FIELD] = L.currency;
   fields[CONFIG.DEAL_SETTLEMENT_HST_DEDUCTED_FIELD] = typeof L.taxDeductedSale === 'number' ? L.taxDeductedSale : 0;
   fields[CONFIG.DEAL_SETTLEMENT_PROVINCE_FIELD] = getSettleStr('settle-province') || '';
-  fields[CONFIG.DEAL_SETTLEMENT_AUCTION_HOUSE_FIELD] = L.house || '';
+  fields[CONFIG.DEAL_SETTLEMENT_AUCTION_HOUSE_FIELD] = L.auctionHouse || L.house || '';
   fields[CONFIG.DEAL_SETTLEMENT_DATE_FIELD] = new Date().toISOString().slice(0, 10);
   fields[CONFIG.DEAL_SETTLEMENT_PDF_URL_FIELD] = '';
 
@@ -2692,24 +2838,25 @@ function loadSettlementFromBitrix() {
     var wireTitle2 = 'Payment for auction fees - ' + getSettleRefLabel();
 
     var lineItems = [
-      { label: 'Przelew 1 (zapis CRM)', value: fmtSettleMoney(t1, cur) },
-      { label: 'Przelew 2 (zapis CRM)', value: fmtSettleMoney(t2, cur) },
-      { label: 'Razem (zapis CRM)', value: fmtSettleMoney(total, cur) }
+      settleLineItem('Przelew 1 (zapis CRM)', t1, cur),
+      settleLineItem('Przelew 2 (zapis CRM)', t2, cur),
+      settleLineItem('Razem (zapis CRM)', total, cur)
     ];
     if (hst > 0) {
-      lineItems.unshift({ label: 'HST / podatek odliczony (CRM)', value: fmtSettleMoney(hst, cur) });
+      lineItems.unshift(settleLineItem('HST / podatek odliczony (CRM)', hst, cur));
     }
 
     settlementLastCalc = {
-      house: house,
+      auctionHouse: house,
       currency: cur,
-      transfer1: t1,
-      transfer2: t2,
+      saleGross: t1,
+      auctionFeesSum: t2,
+      transfer1: { amount: t1, title: wireTitle1 },
+      transfer2: { amount: t2, title: wireTitle2 },
       total: total,
       taxDeductedSale: hst,
-      wireTitle1: wireTitle1,
-      wireTitle2: wireTitle2,
-      bankRef: bankRef,
+      bankRef1: bankRef,
+      bankRef2: bankRef,
       bank: bank,
       lineItems: lineItems,
       invYear: getSettleStr('settle-inv-year'),
@@ -2717,7 +2864,9 @@ function loadSettlementFromBitrix() {
       invModel: getSettleStr('settle-inv-model'),
       vin: getSettleStr('settle-vin'),
       stock: stockStr,
-      infoZwrot: 'Wczytano zapisane rozliczenie z dealu (CRM).'
+      buyerName: getSettleStr('settle-buyer-name'),
+      infoZwrot: 'Wczytano zapisane rozliczenie z dealu (CRM).',
+      usTransportUsd: 0
     };
 
     outEl.innerHTML = buildSettlementResultsCardHtml(settlementLastCalc, refEsc, hasSettlementDealContext());
@@ -2808,6 +2957,42 @@ function settlementFeesTaxMultiplier(rate, provCode) {
 function fmtSettleMoney(v, currency) {
   var n = Math.round(Number(v) * 100) / 100;
   return n.toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ' + currency;
+}
+
+function fmtPdfDollarAmount(v) {
+  var n = Math.round(Number(v) * 100) / 100;
+  if (isNaN(n)) n = 0;
+  var num = n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return '$' + num;
+}
+
+function fmtPdfCurrency(v, currency) {
+  var cur = String(currency || 'USD').toUpperCase();
+  return fmtPdfDollarAmount(v) + ' ' + cur;
+}
+
+function settleLineItem(label, amount, currency) {
+  var cur = currency || 'CAD';
+  var a = Math.round(Number(amount) * 100) / 100;
+  return { label: label, amount: a, currency: cur, value: fmtSettleMoney(a, cur) };
+}
+
+function hasSettlementPrintReady(L) {
+  if (!L) return false;
+  var tr1 = L.transfer1 && typeof L.transfer1 === 'object' ? L.transfer1 : null;
+  var tr2 = L.transfer2 && typeof L.transfer2 === 'object' ? L.transfer2 : null;
+  if (!tr1 || typeof tr1.amount !== 'number' || isNaN(tr1.amount)) return false;
+  if (!tr2 || typeof tr2.amount !== 'number' || isNaN(tr2.amount)) return false;
+  return true;
+}
+
+function invalidateSettlementResultsUi() {
+  settlementLastCalc = null;
+  var out = document.getElementById('settlement-results');
+  if (out) {
+    out.style.display = 'none';
+    out.innerHTML = '';
+  }
 }
 
 function ensureSettlementPdfWorker() {
@@ -3112,7 +3297,9 @@ function calculateSettlement() {
   var carfaxFee = getSettleNum('settle-carfax-fee');
   var digitalFee = getSettleNum('settle-digital-fee');
 
-  var feesBaseSum = buyFee + envFee + auctionFee + pullFee + carfaxFee + digitalFee;
+  var feesSixOnly = buyFee + envFee + auctionFee + pullFee + carfaxFee + digitalFee;
+  var feesBaseSum = feesSixOnly;
+  var auctionFeesSumForPdf = feesSixOnly;
 
   var transfer1 = 0;
   var transfer2 = 0;
@@ -3126,6 +3313,7 @@ function calculateSettlement() {
       transfer1 = Math.round(getSettleNum('settle-sale-amount') * 100) / 100;
       taxDeductedSale = Math.round((getSettleNum('settle-inv-sale-hst') + getSettleNum('settle-inv-sale-pst')) * 100) / 100;
       var feeSumFromPdf = getSettleNum('settle-inv-fees-total');
+      auctionFeesSumForPdf = feeSumFromPdf;
       transfer2 = Math.round(feeSumFromPdf * 1.03 * 100) / 100;
       total = Math.round((transfer1 + transfer2) * 100) / 100;
       infoZwrot = 'Z faktury PDF: HST/GST/PST od Sale (kolumny faktury): ' + fmtSettleMoney(taxDeductedSale, currency) +
@@ -3138,6 +3326,7 @@ function calculateSettlement() {
     taxDeductedSale = saleParts.taxDeducted;
     var feeMult = settlementFeesTaxMultiplier(rate, code);
     var feesWithProvTax = feesBaseSum * feeMult;
+    auctionFeesSumForPdf = feesWithProvTax;
     transfer2 = Math.round(feesWithProvTax * 1.03 * 100) / 100;
     total = Math.round((transfer1 + transfer2) * 100) / 100;
     infoZwrot = 'Kwota podatku odliczonego od Sale Amount (HST/GST/PST): ' + fmtSettleMoney(taxDeductedSale, currency) +
@@ -3151,7 +3340,7 @@ function calculateSettlement() {
       if (usTransportExtra < 0 || isNaN(usTransportExtra)) usTransportExtra = 0;
     }
     transfer1 = saleGross;
-    feesBaseSum = feesBaseSum + usTransportExtra;
+    feesBaseSum = feesSixOnly + usTransportExtra;
     transfer2 = Math.round(feesBaseSum * 100) / 100;
     total = Math.round((transfer1 + transfer2) * 100) / 100;
     taxDeductedSale = 0;
@@ -3168,16 +3357,16 @@ function calculateSettlement() {
   var bankRef = formatWireReference(bank.reference_format || '', stockStr, stockStr, getSettleStr('settle-buyer-name'));
 
   var lineItems = [
-    { label: 'Sale Amount', value: fmtSettleMoney(saleGross, currency) },
-    { label: 'Buy Fee', value: fmtSettleMoney(buyFee, currency) },
-    { label: 'Environmental Fee', value: fmtSettleMoney(envFee, currency) },
-    { label: 'AuctionNow Fee', value: fmtSettleMoney(auctionFee, currency) },
-    { label: 'Pull Fee', value: fmtSettleMoney(pullFee, currency) },
-    { label: 'Carfax Fee', value: fmtSettleMoney(carfaxFee, currency) },
-    { label: 'Digital Sales Fee', value: fmtSettleMoney(digitalFee, currency) }
+    settleLineItem('Sale Amount', saleGross, currency),
+    settleLineItem('Buy Fee', buyFee, currency),
+    settleLineItem('Environmental Fee', envFee, currency),
+    settleLineItem('AuctionNow Fee', auctionFee, currency),
+    settleLineItem('Pull Fee', pullFee, currency),
+    settleLineItem('Carfax Fee', carfaxFee, currency),
+    settleLineItem('Digital Sales Fee', digitalFee, currency)
   ];
   if (isCa && (getSettleStr('settle-inv-src') === 'iaai_pdf' || getSettleStr('settle-inv-src') === 'copart_pdf') && taxDeductedSale > 0) {
-    lineItems.push({ label: 'HST/GST+PST od Sale (z faktury PDF)', value: fmtSettleMoney(taxDeductedSale, currency) });
+    lineItems.push(settleLineItem('HST/GST+PST od Sale (z faktury PDF)', taxDeductedSale, currency));
   }
   var usTrUsd = 0;
   if (!isCa) {
@@ -3185,24 +3374,25 @@ function calculateSettlement() {
     if (inclTr2 && inclTr2.checked) {
       usTrUsd = getSettleNum('settle-transport-usd-total');
       if (usTrUsd > 0 && !isNaN(usTrUsd)) {
-        lineItems.push({ label: 'Transport USA (ląd + morze)', value: fmtSettleMoney(usTrUsd, currency) });
+        lineItems.push(settleLineItem('Transport USA (ląd + morze)', usTrUsd, 'USD'));
       }
     }
   }
-  lineItems.push({ label: 'Przelew 1 (pojazd)', value: fmtSettleMoney(transfer1, currency) });
-  lineItems.push({ label: 'Przelew 2 (opłaty)', value: fmtSettleMoney(transfer2, currency) });
-  lineItems.push({ label: 'Razem', value: fmtSettleMoney(total, currency) });
+  lineItems.push(settleLineItem('Przelew 1 (pojazd)', transfer1, currency));
+  lineItems.push(settleLineItem('Przelew 2 (opłaty)', transfer2, currency));
+  lineItems.push(settleLineItem('Razem', total, currency));
 
   settlementLastCalc = {
-    house: house,
+    auctionHouse: house,
     currency: currency,
-    transfer1: transfer1,
-    transfer2: transfer2,
+    saleGross: saleGross,
+    auctionFeesSum: auctionFeesSumForPdf,
+    transfer1: { amount: transfer1, title: wireTitle1 },
+    transfer2: { amount: transfer2, title: wireTitle2 },
     total: total,
     taxDeductedSale: taxDeductedSale,
-    wireTitle1: wireTitle1,
-    wireTitle2: wireTitle2,
-    bankRef: bankRef,
+    bankRef1: bankRef,
+    bankRef2: bankRef,
     bank: bank,
     lineItems: lineItems,
     invYear: getSettleStr('settle-inv-year'),
@@ -3210,6 +3400,7 @@ function calculateSettlement() {
     invModel: getSettleStr('settle-inv-model'),
     vin: getSettleStr('settle-vin'),
     stock: stockStr,
+    buyerName: getSettleStr('settle-buyer-name'),
     infoZwrot: infoZwrot,
     usTransportUsd: !isCa ? usTrUsd : 0
   };
@@ -3224,6 +3415,7 @@ document.addEventListener('DOMContentLoaded', function() {
   if (ah) {
     ah.addEventListener('change', populateSettleProvince);
     ah.addEventListener('change', function() {
+      if (typeof invalidateSettlementResultsUi === 'function') invalidateSettlementResultsUi();
       if (typeof updateUsTransportBlockVisibility === 'function') updateUsTransportBlockVisibility();
       if (typeof recalcUsTransportDisplay === 'function') recalcUsTransportDisplay();
     });
@@ -3257,8 +3449,31 @@ document.addEventListener('DOMContentLoaded', function() {
   var ci;
   for (ci = 0; ci < clearIds.length; ci++) {
     var cel = document.getElementById(clearIds[ci]);
-    if (cel) cel.addEventListener('input', clearSettleInvoiceMeta);
+    if (cel) {
+      cel.addEventListener('input', function() {
+        clearSettleInvoiceMeta();
+        if (typeof invalidateSettlementResultsUi === 'function') invalidateSettlementResultsUi();
+      });
+    }
   }
+
+  var invalidateOnlyIds = [
+    'settle-province', 'settle-buyer-name', 'settle-vin', 'settle-stock', 'settle-us-zip'
+  ];
+  var ii;
+  for (ii = 0; ii < invalidateOnlyIds.length; ii++) {
+    var iel = document.getElementById(invalidateOnlyIds[ii]);
+    if (iel) {
+      iel.addEventListener('input', invalidateSettlementResultsUi);
+      iel.addEventListener('change', invalidateSettlementResultsUi);
+    }
+  }
+  var usVeh2 = document.getElementById('settle-us-vehicle-type');
+  var usPort2 = document.getElementById('settle-us-ocean-port');
+  var inclTrEl = document.getElementById('settle-include-us-transport');
+  if (usVeh2) usVeh2.addEventListener('change', invalidateSettlementResultsUi);
+  if (usPort2) usPort2.addEventListener('change', invalidateSettlementResultsUi);
+  if (inclTrEl) inclTrEl.addEventListener('change', invalidateSettlementResultsUi);
 });
 </script>
 

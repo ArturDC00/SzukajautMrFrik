@@ -71,6 +71,14 @@
 </div>
 
 <div class="info-block">
+  <div class="lbl">Pole oferty — zdjęcia z aukcji (opcjonalnie):</div>
+  <input type="text" class="webhook-input" id="ufAuctionPhotos" placeholder="np. UF_CRM_QUOTE_1234567890" autocomplete="off" spellcheck="false" />
+  <button class="save-btn" type="button" id="saveUfPhotos">Zapisz kod pola</button>
+  <div class="lbl" id="ufPhotosStatus" style="margin-top:6px"></div>
+  <div class="save-hint">Nazwa pola użytkownika w <strong>Ofercie</strong> (CRM → Ustawienia → Oferty → Pola), typ zwykle <strong>HTML</strong> lub długi tekst. Gdy ustawione, galeria trafia tam zamiast do komentarzy tekstowych i zamiast osobnego komentarza timeline.</div>
+</div>
+
+<div class="info-block">
   <div class="lbl">Aktualny deal (z zakładki Bitrix24):</div>
   <div class="val" id="dealIdVal">—</div>
   <div class="lbl" style="margin-top:8px">Portal:</div>

@@ -355,6 +355,8 @@ const CFG = {
   // Znane pola w encji Oferta
   QUOTE_EST_PRICE_FIELD:  'UF_CRM_QUOTE_1749798603485',
   QUOTE_SOURCE_FIELD:     'UF_CRM_QUOTE_1775199244953',
+  /** Puste '' = nie zapisuj HTML galerii do osobnego pola. Uzupełnij kod pola typu HTML w ofercie („Zdjęcia z aukcji”). */
+  QUOTE_AUCTION_PHOTOS_UF: '',
   SOURCE_ENUM_IAAI:       3089,
   SOURCE_ENUM_COPART:     3091,
 };
@@ -583,16 +585,24 @@ function saveToQuote() {
     d.estimatedValue ? `Szacowana wartość: $${fmtNum(d.estimatedValue)}` : null,
     '',
     currentAuctionUrl ? `Link aukcji (wewnętrzny): ${currentAuctionUrl}` : null,
-    '',
-    d.images && d.images.length > 0
-      ? `Zdjęcia:\n${d.images.slice(0, 10).join('\n')}`
-      : null,
   ].filter(Boolean);
 
   const fields = {
     TITLE:    title,
     COMMENTS: lines.join('\n'),
   };
+
+  function escAttr(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  }
+  if (CFG.QUOTE_AUCTION_PHOTOS_UF && d.images && d.images.length > 0) {
+    const imgs = d.images.slice(0, 10).map(function (url) {
+      return '<img referrerpolicy="no-referrer" src="' + escAttr(url)
+        + '" style="max-width:220px;margin:3px;border-radius:4px;display:inline-block" alt="">';
+    }).join('');
+    fields[CFG.QUOTE_AUCTION_PHOTOS_UF] =
+      '<p><strong>Zdjęcia z aukcji (' + d.images.length + '):</strong></p>' + imgs;
+  }
 
   if (d.estimatedValue) {
     fields['OPPORTUNITY']              = d.estimatedValue;

@@ -8,10 +8,20 @@ function showWebhookStatus(msg, ok) {
   el.style.color = ok ? '#34b251' : (ok === false ? '#e53935' : '#888');
 }
 
-chrome.storage.local.get(['frik_webhook', 'frik_deal_id', 'frik_domain'], data => {
+function showUfPhotosStatus(msg, ok) {
+  const el = $('ufPhotosStatus');
+  el.textContent = msg || '';
+  el.style.color = ok ? '#34b251' : (ok === false ? '#e53935' : '#888');
+}
+
+chrome.storage.local.get(['frik_webhook', 'frik_deal_id', 'frik_domain', 'frik_quote_auction_photos_uf'], data => {
   if (data.frik_webhook) {
     $('webhookInput').value = data.frik_webhook;
     showWebhookStatus('Zapisano ✓', true);
+  }
+  if (data.frik_quote_auction_photos_uf) {
+    $('ufAuctionPhotos').value = data.frik_quote_auction_photos_uf;
+    showUfPhotosStatus('Zapisano ✓', true);
   }
   const el = $('dealIdVal');
   if (data.frik_deal_id) {
@@ -43,6 +53,25 @@ $('saveWebhook').addEventListener('click', () => {
   }
   chrome.storage.local.set({ frik_webhook: v }, () => {
     showWebhookStatus('Zapisano ✓', true);
+  });
+});
+
+$('saveUfPhotos').addEventListener('click', () => {
+  const v = ($('ufAuctionPhotos').value || '').trim();
+  if (!v) {
+    chrome.storage.local.remove('frik_quote_auction_photos_uf', () => {
+      showUfPhotosStatus('Wyczyszczono — zdjęcia: timeline + bez listy w komentarzu.', false);
+    });
+    return;
+  }
+  const norm = v.replace(/^uf_crm_/i, 'UF_CRM_');
+  if (!/^UF_CRM_[A-Z0-9_]+$/i.test(norm)) {
+    showUfPhotosStatus('Format: UF_CRM_QUOTE_… (litery, cyfry, _)', false);
+    return;
+  }
+  chrome.storage.local.set({ frik_quote_auction_photos_uf: norm }, () => {
+    $('ufAuctionPhotos').value = norm;
+    showUfPhotosStatus('Zapisano ✓', true);
   });
 });
 

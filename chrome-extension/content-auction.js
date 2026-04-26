@@ -18,7 +18,7 @@
   const HOST   = location.hostname.replace(/^www\./, '');
   const sourceConfig = FrikAuctionSources.getSourceByHost(HOST);
   if (!sourceConfig) return;
-  try { console.info('[MrFrik] content-auction', '1.2.1'); } catch (_) {}
+  try { console.info('[MrFrik] content-auction', '1.2.2'); } catch (_) {}
   const ACCENT      = sourceConfig.fabColor;
   const ACCENT_DARK = sourceConfig.accentHover;
 
@@ -568,10 +568,6 @@
         ? `Szacowana wartość: $${d.estimatedValue.toLocaleString('en')} ${valLbl}` : null,
       '',
       d.auctionUrl  ? `Link aukcji: ${d.auctionUrl}`              : null,
-      '',
-      d.images && d.images.length
-        ? `Zdjęcia:\n${d.images.join('\n')}`
-        : null,
     ].filter(x => x !== null);
     return lines.join('\n');
   }
@@ -600,8 +596,8 @@
       .replace(/</g, '&lt;');
   }
 
-  async function addPhotosComment(quoteId, images, whBase) {
-    if (!images || !images.length) return;
+  function buildAuctionPhotosHtml(images) {
+    if (!images || !images.length) return '';
     const imgs = images.slice(0, 10)
       .map(function (u) {
         const src = escapeAttr(u);
@@ -609,6 +605,32 @@
           + '" style="max-width:220px;margin:3px;border-radius:4px;display:inline-block" alt="">';
       })
       .join('');
+    return '<p><strong>Zdjęcia z aukcji (' + images.length + '):</strong></p>' + imgs;
+  }
+
+  async function writeAuctionPhotosToQuoteUf(quoteId, images, whBase, ufKey) {
+    if (!images || !images.length || !ufKey) return;
+    const html = buildAuctionPhotosHtml(images);
+    const resp = await fetch(whBase + '/crm.quote.update.json', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ id: quoteId, fields: { [ufKey]: html } }),
+    });
+    const raw = await resp.text();
+    let json;
+    try {
+      json = JSON.parse(raw);
+    } catch (_) {
+      throw new Error('quote.update: zła odpowiedź');
+    }
+    if (!resp.ok || json.error) {
+      throw new Error(json.error_description || json.error || 'quote.update');
+    }
+  }
+
+  async function addPhotosComment(quoteId, images, whBase) {
+    if (!images || !images.length) return;
+    const inner = buildAuctionPhotosHtml(images);
     await fetch(whBase + '/crm.timeline.comment.add.json', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -616,7 +638,7 @@
         fields: {
           ENTITY_ID:   quoteId,
           ENTITY_TYPE: 'quote',
-          COMMENT:     `<p><strong>Zdjęcia pojazdu (${images.length} szt.):</strong></p>${imgs}`,
+          COMMENT:     inner,
         },
       }),
     });
@@ -754,7 +776,15 @@
 
     const quoteId = json.result;
     if (data.images && data.images.length > 0) {
-      addPhotosComment(quoteId, data.images, wh).catch(() => {});
+      const ufStored = await new Promise(r =>
+        chrome.storage.local.get('frik_quote_auction_photos_uf', r)
+      );
+      const ufPhoto = (ufStored.frik_quote_auction_photos_uf || '').trim();
+      if (ufPhoto && /^UF_CRM_[A-Z0-9_]+$/i.test(ufPhoto)) {
+        writeAuctionPhotosToQuoteUf(quoteId, data.images, wh, ufPhoto).catch(function () {});
+      } else {
+        addPhotosComment(quoteId, data.images, wh).catch(function () {});
+      }
     }
     return quoteId;
   }

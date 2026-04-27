@@ -857,8 +857,177 @@
   }
 
   // ── Create Quote via Bitrix24 webhook ────────────────────────────
+  // ── Bitrix Quote UF map (bitrix-quote-fields.json + storage + XML_ID FRIK_AUCTION_*) ──
+  let cachedQuoteFieldMap = null;
+
+  const UF_XML_IDS = {
+    QUOTE_PHOTOS_HTML_FIELD:       'FRIK_AUCTION_PHOTOS_HTML',
+    QUOTE_VIN_FIELD:               'FRIK_AUCTION_VIN',
+    QUOTE_YEAR_FIELD:              'FRIK_AUCTION_YEAR',
+    QUOTE_MAKE_FIELD:              'FRIK_AUCTION_MAKE',
+    QUOTE_MODEL_FIELD:             'FRIK_AUCTION_MODEL',
+    QUOTE_LOT_FIELD:               'FRIK_AUCTION_LOT',
+    QUOTE_LOCATION_FIELD:          'FRIK_AUCTION_LOCATION',
+    QUOTE_AUCTION_URL_FIELD:       'FRIK_AUCTION_URL',
+    QUOTE_PRIMARY_DAMAGE_FIELD:    'FRIK_AUCTION_PRIMARY_DAMAGE',
+    QUOTE_SECONDARY_DAMAGE_FIELD:  'FRIK_AUCTION_SECONDARY_DAMAGE',
+    QUOTE_RUN_DRIVE_FIELD:         'FRIK_AUCTION_RUN_DRIVE',
+    QUOTE_SALE_DATE_FIELD:         'FRIK_AUCTION_SALE_DATE',
+    QUOTE_ODOMETER_KM_FIELD:       'FRIK_AUCTION_ODOMETER_KM',
+  };
+
+  function stripMetaKeys(obj) {
+    const o = {};
+    Object.keys(obj || {}).forEach(function (k) {
+      if (k.indexOf('_') === 0) return;
+      o[k] = obj[k];
+    });
+    return o;
+  }
+
+  function isUfCode(s) {
+    return typeof s === 'string' && /^UF_CRM_[A-Z0-9_]+$/i.test(s.trim());
+  }
+
+  function resolveSourceEnumForQuote(map, srcCfg) {
+    if (srcCfg.sourceEnum != null && srcCfg.sourceEnum !== '') {
+      const n = Number(srcCfg.sourceEnum);
+      return isNaN(n) ? null : n;
+    }
+    const extra = map.SOURCE_ENUM_EXTRA || {};
+    const ex = extra[srcCfg.id];
+    if (ex !== undefined && ex !== '' && ex != null) {
+      const n = Number(ex);
+      if (!isNaN(n)) return n;
+    }
+    const id = srcCfg.id;
+    if (id === 'IAAI_US' || id === 'IAAI_CA') {
+      return map.SOURCE_ENUM_IAAI != null ? Number(map.SOURCE_ENUM_IAAI) : null;
+    }
+    if (id === 'COPART_US' || id === 'COPART_CA') {
+      return map.SOURCE_ENUM_COPART != null ? Number(map.SOURCE_ENUM_COPART) : null;
+    }
+    return null;
+  }
+
+  function applyQuoteAuctionUfs(fields, data, map) {
+    const cur = data.currency || 'USD';
+
+    if (map.QUOTE_EST_PRICE_FIELD && isUfCode(map.QUOTE_EST_PRICE_FIELD)
+      && data.estimatedValue != null && data.estimatedValue !== '') {
+      fields[map.QUOTE_EST_PRICE_FIELD.trim()] = {
+        VALUE:    String(data.estimatedValue),
+        CURRENCY: cur,
+      };
+    }
+
+    const enumId = resolveSourceEnumForQuote(map, sourceConfig);
+    if (map.QUOTE_SOURCE_FIELD && isUfCode(map.QUOTE_SOURCE_FIELD) && enumId != null) {
+      fields[map.QUOTE_SOURCE_FIELD.trim()] = enumId;
+    }
+
+    function setStr(key, val) {
+      const uf = map[key];
+      if (!isUfCode(uf)) return;
+      if (val == null || val === '') return;
+      fields[uf.trim()] = typeof val === 'string' ? val : String(val);
+    }
+
+    setStr('QUOTE_VIN_FIELD', data.vin);
+    setStr('QUOTE_MAKE_FIELD', data.make);
+    setStr('QUOTE_MODEL_FIELD', data.model);
+    setStr('QUOTE_LOT_FIELD', data.lotNumber);
+    setStr('QUOTE_LOCATION_FIELD', data.location);
+    setStr('QUOTE_AUCTION_URL_FIELD', data.auctionUrl);
+    setStr('QUOTE_PRIMARY_DAMAGE_FIELD', data.primaryDamage);
+    setStr('QUOTE_SECONDARY_DAMAGE_FIELD', data.secondaryDamage);
+    setStr('QUOTE_RUN_DRIVE_FIELD', data.runDrive);
+    setStr('QUOTE_SALE_DATE_FIELD', data.saleDate);
+
+    if (map.QUOTE_YEAR_FIELD && isUfCode(map.QUOTE_YEAR_FIELD) && data.year != null && data.year !== '') {
+      const y = parseInt(data.year, 10);
+      if (!isNaN(y)) fields[map.QUOTE_YEAR_FIELD.trim()] = y;
+    }
+
+    let odoKm = data.odometerKm;
+    if (odoKm == null && data.odometerMi != null) {
+      odoKm = Math.round(data.odometerMi * 1.609344);
+    }
+    if (map.QUOTE_ODOMETER_KM_FIELD && isUfCode(map.QUOTE_ODOMETER_KM_FIELD)
+      && odoKm != null && !isNaN(Number(odoKm))) {
+      fields[map.QUOTE_ODOMETER_KM_FIELD.trim()] = Number(odoKm);
+    }
+  }
+
+  async function loadQuoteFieldMap(wh) {
+    if (cachedQuoteFieldMap) return cachedQuoteFieldMap;
+
+    let base = {};
+    try {
+      const r = await fetch(chrome.runtime.getURL('bitrix-quote-fields.json'));
+      base = await r.json();
+    } catch (_) {
+      base = {};
+    }
+    base = stripMetaKeys(base);
+
+    try {
+      const stored = await chrome.storage.local.get(['frik_quote_uf_json', 'frik_quote_uf_xml_cache']);
+      if (stored.frik_quote_uf_json) {
+        try {
+          const over = typeof stored.frik_quote_uf_json === 'string'
+            ? JSON.parse(stored.frik_quote_uf_json)
+            : stored.frik_quote_uf_json;
+          base = Object.assign({}, base, stripMetaKeys(over || {}));
+        } catch (_) { /* ignore */ }
+      }
+
+      const xmlCache = (stored.frik_quote_uf_xml_cache && typeof stored.frik_quote_uf_xml_cache === 'object')
+        ? stored.frik_quote_uf_xml_cache
+        : {};
+      const need = [];
+      Object.keys(UF_XML_IDS).forEach(function (configKey) {
+        const v = base[configKey];
+        if (v && String(v).trim() !== '') return;
+        const xmlId = UF_XML_IDS[configKey];
+        if (xmlCache[xmlId]) {
+          base[configKey] = xmlCache[xmlId];
+        } else {
+          need.push({ configKey: configKey, xmlId: xmlId });
+        }
+      });
+
+      if (need.length && wh) {
+        const newCache = Object.assign({}, xmlCache);
+        await Promise.all(need.map(function (item) {
+          return fetch(wh + '/crm.quote.userfield.list.json', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ filter: { XML_ID: item.xmlId } }),
+          })
+            .then(function (resp) { return resp.json(); })
+            .then(function (json) {
+              const field = json.result && json.result[0];
+              if (field && field.FIELD_NAME) {
+                base[item.configKey] = field.FIELD_NAME;
+                newCache[item.xmlId] = field.FIELD_NAME;
+              }
+            })
+            .catch(function () {});
+        }));
+        chrome.storage.local.set({ frik_quote_uf_xml_cache: newCache });
+      }
+    } catch (_) { /* brak mapy / webhook */ }
+
+    cachedQuoteFieldMap = base;
+    return base;
+  }
+
   async function createQuote(data, dealId, poziomEnumId, contactId, companyId) {
     const wh = await getWebhookBase();
+    await loadQuoteFieldMap(wh);
+    const qMap = cachedQuoteFieldMap || {};
+
     const title = data.vehicleTitle
       || [data.year, data.make, data.model].filter(Boolean).join(' ')
       || 'Auto z aukcji';
@@ -876,13 +1045,24 @@
     if (contactId) fields.CONTACT_ID = parseInt(contactId, 10);
     if (companyId) fields.COMPANY_ID = parseInt(companyId, 10);
 
-    // Szacunkowa wartość — tylko standardowe pole Bitrix (UF z innego portalu = HTTP 400).
+    // Szacunkowa wartość — standardowe pole + opcjonalne UF (bitrix-quote-fields.json).
     if (data.estimatedValue) {
       fields.OPPORTUNITY = data.estimatedValue;
     }
 
-    // Kraj / region / VIN / lot są w COMMENTS (buildComments) — nie wysyłamy sztywnych UF_CRM_*
-    // z obcej instancji; pole „Poziom dopasowania” tylko jeśli znaleziono po XML_ID w portalu.
+    applyQuoteAuctionUfs(fields, data, qMap);
+
+    // Galeria HTML w pierwszym żądaniu (jak zakładka Oferta), jeśli znany kod pola.
+    const storedPh = await chrome.storage.local.get('frik_quote_auction_photos_uf');
+    const ufFromPopup = (storedPh.frik_quote_auction_photos_uf || '').trim();
+    const photosKey = (qMap.QUOTE_PHOTOS_HTML_FIELD || '').trim() || ufFromPopup;
+    let photosInRequest = false;
+    if (photosKey && isUfCode(photosKey) && data.images && data.images.length > 0) {
+      fields[photosKey.trim()] = buildAuctionPhotosHtml(data.images);
+      photosInRequest = true;
+    }
+
+    // Pole „Poziom dopasowania” — jeśli znaleziono po XML_ID w portalu.
     if (poziomEnumId && cachedFieldName) {
       fields[cachedFieldName] = poziomEnumId;
     }
@@ -907,7 +1087,7 @@
     if (json.error) throw new Error(json.error_description || json.error);
 
     const quoteId = json.result;
-    if (data.images && data.images.length > 0) {
+    if (data.images && data.images.length > 0 && !photosInRequest) {
       const ufStored = await new Promise(r =>
         chrome.storage.local.get('frik_quote_auction_photos_uf', r)
       );

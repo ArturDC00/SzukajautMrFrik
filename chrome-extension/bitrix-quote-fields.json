@@ -1,0 +1,26 @@
+{
+  "_usage": "Domyślne UF jak zakładka Oferta / CONFIG rozliczenia. Puste QUOTE_* = nie wysyłaj lub auto z XML_ID (FRIK_AUCTION_*). Nadpisanie: chrome.storage frik_quote_uf_json (obiekt JSON).",
+  "QUOTE_EST_PRICE_FIELD": "UF_CRM_QUOTE_1749798603485",
+  "QUOTE_SOURCE_FIELD": "UF_CRM_QUOTE_1775199244953",
+  "QUOTE_PHOTOS_HTML_FIELD": "",
+  "SOURCE_ENUM_IAAI": 3089,
+  "SOURCE_ENUM_COPART": 3091,
+  "SOURCE_ENUM_EXTRA": {
+    "IAAI_CA": "",
+    "COPART_CA": "",
+    "PROGI_CA": "",
+    "MANHEIM_ADESA": ""
+  },
+  "QUOTE_VIN_FIELD": "",
+  "QUOTE_YEAR_FIELD": "",
+  "QUOTE_MAKE_FIELD": "",
+  "QUOTE_MODEL_FIELD": "",
+  "QUOTE_LOT_FIELD": "",
+  "QUOTE_LOCATION_FIELD": "",
+  "QUOTE_AUCTION_URL_FIELD": "",
+  "QUOTE_PRIMARY_DAMAGE_FIELD": "",
+  "QUOTE_SECONDARY_DAMAGE_FIELD": "",
+  "QUOTE_RUN_DRIVE_FIELD": "",
+  "QUOTE_SALE_DATE_FIELD": "",
+  "QUOTE_ODOMETER_KM_FIELD": ""
+}

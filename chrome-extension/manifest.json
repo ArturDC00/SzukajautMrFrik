@@ -37,6 +37,8 @@
     "https://*.manheim-adesa.com/*",
     "https://manheim-adesa.com/*",
     "https://mrfrik.com/mrfrik/*",
+    "https://app.mrfrik.com/*",
+    "https://*.mrfrik.com/*",
     "https://*.bitrix24.pl/*",
     "https://*.bitrix24.com/*"
   ],
@@ -44,6 +46,8 @@
     {
       "matches": [
         "https://mrfrik.com/mrfrik/*",
+        "https://app.mrfrik.com/*",
+        "https://*.mrfrik.com/*",
         "https://*.bitrix24.pl/*",
         "https://*.bitrix24.com/*"
       ],

@@ -46,6 +46,8 @@ const manifest = {
   host_permissions: [
     ...auctionMatches,
     'https://mrfrik.com/mrfrik/*',
+    'https://app.mrfrik.com/*',
+    'https://*.mrfrik.com/*',
     'https://*.bitrix24.pl/*',
     'https://*.bitrix24.com/*',
   ],
@@ -53,6 +55,8 @@ const manifest = {
     {
       matches: [
         'https://mrfrik.com/mrfrik/*',
+        'https://app.mrfrik.com/*',
+        'https://*.mrfrik.com/*',
         'https://*.bitrix24.pl/*',
         'https://*.bitrix24.com/*',
       ],

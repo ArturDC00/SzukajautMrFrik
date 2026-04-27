@@ -20,15 +20,41 @@ Webhook Bitrix i hosting zakładek ustawiasz lokalnie / na serwerze produkcyjnym
 
 ## Wdrożenie na produkcję (mrfrik.com)
 
-**Sam commit w Cursorze / Source Control nie wgrywa plików na serwer** — Git tylko zapisuje historię w repozytorium. Żeby strona `https://mrfrik.com/mrfrik/` i plik `mrfrik-extension.zip` się zaktualizowały, trzeba albo ręcznie wrzucić pliki na hosting, albo uruchomić automat z repozytorium **GitHub**.
+### Przepływ: lokalnie → GitHub → serwer
 
-W repozytorium jest workflow **GitHub Actions** (`.github/workflows/deploy-mrfrik-ftp.yml`):
+1. **Commit + Push** z Cursora (Source Control) na branch **`main`** do repozytorium  
+   `https://github.com/ArturDC00/SzukajautMrFrik.git` — sam commit lokalny **nie** uruchamia wdrożenia; musi być **`git push`** (albo „Sync” / „Publish Branch” w IDE).
+2. Na GitHubie uruchamia się workflow **Actions** → **Deploy mrfrik** (`.github/workflows/deploy-mrfrik.yml`): buduje wtyczkę i zawartość `deploy/`, potem wgrywa ją na serwer **jedną z dwóch metod** (ustawiasz tylko jedną — pierwszeństwo ma SSH).
 
-1. Repozytorium musi być na **GitHubie** i **wysłane** tam (`git push`), nie tylko commit lokalny.
-2. W **Settings → Secrets and variables → Actions** dodaj sekrety:
-   - `FTP_SERVER` — adres serwera FTP,
-   - `FTP_USERNAME`, `FTP_PASSWORD`,
-   - `FTP_REMOTE_DIR` — katalog odpowiadający URL-owi `/mrfrik/` na serwerze (np. `public_html/mrfrik/` — zgodnie z panelem hostingu).
-3. Po każdym **pushu** na branch `main` lub `master` workflow zbuduje wtyczkę (`npm ci` + `npm run build` w `chrome-extension/`), utworzy `deploy/` (HTML + świeży `mrfrik-extension.zip`) i wgra folder `deploy/` przez FTP.
+### Jednorazowa konfiguracja sekretów (GitHub)
 
-Ręcznie lokalnie ten sam zestaw zbudujesz: `bash scripts/build-deploy-artifacts.sh`, a potem zawartość `deploy/` wrzucasz tam, gdzie stoi produkcja.
+**Repozytorium → Settings → Secrets and variables → Actions → New repository secret.**
+
+#### A) VPS przez SSH/rsync (zalecane)
+
+| Sekret | Przykład / znaczenie |
+|--------|----------------------|
+| `SSH_HOST` | `135.125.243.231` lub hostname |
+| `SSH_USER` | `ubuntu` |
+| `SSH_PRIVATE_KEY` | Cały klucz prywatny PEM (np. treść `~/.ssh/id_ed25519` lub dedykowany klucz deploy); **publiczny** klucz dodaj na serwerze w `~/.ssh/authorized_keys` użytkownika `SSH_USER` |
+| `SSH_REMOTE_DIR` | Absolutna ścieżka katalogu, pod który nginx serwuje zawartość jak z `/mrfrik/` (np. `.../public/mrfrik/` — **końcówka `/`**; musi odpowiadać temu, co masz w produkcji) |
+
+Jeśli `SSH_HOST` jest ustawiony, workflow **nie** użyje FTP.
+
+#### B) Hosting z FTP
+
+| Sekret | Znaczenie |
+|--------|-----------|
+| `FTP_SERVER` | Host FTP |
+| `FTP_USERNAME`, `FTP_PASSWORD` | Dane logowania |
+| `FTP_REMOTE_DIR` | Katalog docelowy na serwerze (np. `public_html/mrfrik/`) |
+
+Używaj FTP **tylko** gdy nie ustawiasz `SSH_HOST` (np. hosting współdzielony bez SSH).
+
+### Co robi workflow
+
+Po **pushu** na `main` lub `master` (albo ręcznie: Actions → **Deploy mrfrik** → **Run workflow**): `npm ci` + `npm run build` w `chrome-extension/`, paczka `deploy/` (HTML + `mrfrik-extension.zip` itd.), synchronizacja na serwer.
+
+### Lokalny build bez Actions
+
+Ten sam zestaw co na CI: `bash scripts/build-deploy-artifacts.sh` — wynik w `deploy/` (do testów lub ręcznego rsync).

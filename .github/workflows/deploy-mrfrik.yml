@@ -1,0 +1,117 @@
+# Local → GitHub (push) → ten workflow → serwer (SSH/rsync LUB FTP).
+# Ustaw TYLKO jedną metodę sekretami — pierwszeństwo ma SSH, gdy ustawiono SSH_HOST.
+
+name: Deploy mrfrik (build + rsync lub FTP)
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-mrfrik-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: chrome-extension/package-lock.json
+
+      - name: Build artifacts (extension + HTML → deploy/)
+        run: bash scripts/build-deploy-artifacts.sh
+
+      - name: Wybierz metodę wdrożenia
+        id: method
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          FTP_SERVER: ${{ secrets.FTP_SERVER }}
+        run: |
+          if [ -n "$SSH_HOST" ]; then
+            echo "kind=ssh" >> "$GITHUB_OUTPUT"
+            echo "Używam SSH/rsync (sekret SSH_HOST ustawiony)."
+          elif [ -n "$FTP_SERVER" ]; then
+            echo "kind=ftp" >> "$GITHUB_OUTPUT"
+            echo "Używam FTP (sekret FTP_SERVER ustawiony)."
+          else
+            echo "::error::Brak konfiguracji wdrożenia."
+            echo "Ustaw w GitHub → Settings → Secrets and variables → Actions:"
+            echo "  • VPS (zalecane): SSH_HOST, SSH_USER, SSH_PRIVATE_KEY, SSH_REMOTE_DIR"
+            echo "  • Hosting FTP: FTP_SERVER, FTP_USERNAME, FTP_PASSWORD, FTP_REMOTE_DIR"
+            exit 1
+          fi
+
+      # ─── SSH / rsync ─────────────────────────────────────────────
+      - name: Walidacja sekretów SSH
+        if: steps.method.outputs.kind == 'ssh'
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_REMOTE_DIR: ${{ secrets.SSH_REMOTE_DIR }}
+        run: |
+          missing=0
+          if [ -z "$SSH_HOST" ]; then echo "::error::Brak SSH_HOST"; missing=1; fi
+          if [ -z "$SSH_USER" ]; then echo "::error::Brak SSH_USER"; missing=1; fi
+          if [ -z "$SSH_PRIVATE_KEY" ]; then echo "::error::Brak SSH_PRIVATE_KEY"; missing=1; fi
+          if [ -z "$SSH_REMOTE_DIR" ]; then echo "::error::Brak SSH_REMOTE_DIR"; missing=1; fi
+          exit $missing
+
+      - uses: webfactory/ssh-agent@v0.9.0
+        if: steps.method.outputs.kind == 'ssh'
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Rsync deploy/ na serwer
+        if: steps.method.outputs.kind == 'ssh'
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_REMOTE_DIR: ${{ secrets.SSH_REMOTE_DIR }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          # SSH_REMOTE_DIR: katalog docelowy URL statycznego mrfrik (np. .../public/mrfrik/) — końcówka / ważna dla rsync
+          rsync -avz --delete \
+            -e "ssh -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30" \
+            ./deploy/ "${SSH_USER}@${SSH_HOST}:${SSH_REMOTE_DIR}"
+
+      # ─── FTP ───────────────────────────────────────────────────────
+      - name: Walidacja sekretów FTP
+        if: steps.method.outputs.kind == 'ftp'
+        env:
+          FTP_SERVER: ${{ secrets.FTP_SERVER }}
+          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+          FTP_REMOTE_DIR: ${{ secrets.FTP_REMOTE_DIR }}
+        run: |
+          missing=0
+          if [ -z "$FTP_SERVER" ]; then echo "::error::Brak FTP_SERVER"; missing=1; fi
+          if [ -z "$FTP_USERNAME" ]; then echo "::error::Brak FTP_USERNAME"; missing=1; fi
+          if [ -z "$FTP_PASSWORD" ]; then echo "::error::Brak FTP_PASSWORD"; missing=1; fi
+          if [ -z "$FTP_REMOTE_DIR" ]; then echo "::error::Brak FTP_REMOTE_DIR"; missing=1; fi
+          if [ "$missing" -ne 0 ]; then
+            echo "Ustaw dokładnie: FTP_SERVER, FTP_USERNAME, FTP_PASSWORD, FTP_REMOTE_DIR"
+            exit 1
+          fi
+
+      - name: FTP upload
+        if: steps.method.outputs.kind == 'ftp'
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.6
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          local-dir: ./deploy/
+          server-dir: ${{ secrets.FTP_REMOTE_DIR }}
+          log-level: verbose

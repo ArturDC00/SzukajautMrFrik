@@ -1,0 +1,43 @@
+# Po pushu do main/master: buduje wtyczkę (dist + ZIP), wgrywa deploy/ na hosting przez FTP.
+# Wymaga sekretów w repozytorium GitHub (Settings → Secrets and variables → Actions).
+#
+# FTP_SERVER    — host (np. ftp.mrfrik.com lub IP)
+# FTP_USERNAME  — login FTP
+# FTP_PASSWORD  — hasło FTP
+# FTP_REMOTE_DIR — katalog docelowy na serwerze, np. /public_html/mrfrik/ (z ukośnikiem na końcu)
+
+name: Deploy mrfrik static + extension zip
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-mrfrik
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: chrome-extension/package-lock.json
+
+      - name: Build artifacts (extension + HTML → deploy/)
+        run: bash scripts/build-deploy-artifacts.sh
+
+      - name: FTP upload
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.6
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          local-dir: ./deploy/
+          server-dir: ${{ secrets.FTP_REMOTE_DIR }}
+          log-level: verbose

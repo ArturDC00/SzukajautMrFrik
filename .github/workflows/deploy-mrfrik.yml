@@ -78,13 +78,22 @@ jobs:
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_REMOTE_DIR: ${{ secrets.SSH_REMOTE_DIR }}
         run: |
+          set -euo pipefail
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
           ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
-          # SSH_REMOTE_DIR: katalog docelowy URL statycznego mrfrik (np. .../public/mrfrik/) — końcówka / ważna dla rsync
+
+          SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o BatchMode=yes"
+          DEST="${SSH_USER}@${SSH_HOST}:${SSH_REMOTE_DIR}"
+
+          echo "→ Sprawdzam katalog docelowy (rsync kod 11 = zwykle brak zapisu lub zła ścieżka SSH_REMOTE_DIR)."
+          ssh $SSH_OPTS "${SSH_USER}@${SSH_HOST}" \
+            "mkdir -p \"${SSH_REMOTE_DIR}\" && test -w \"${SSH_REMOTE_DIR}\" && ls -lad \"${SSH_REMOTE_DIR}\""
+
+          echo "→ rsync ./deploy/ → host"
           rsync -avz --delete \
-            -e "ssh -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30" \
-            ./deploy/ "${SSH_USER}@${SSH_HOST}:${SSH_REMOTE_DIR}"
+            -e "ssh $SSH_OPTS" \
+            ./deploy/ "$DEST"
 
       # ─── FTP ───────────────────────────────────────────────────────
       - name: Walidacja sekretów FTP

@@ -1,0 +1,36 @@
+{
+  "$schemaNote": "Mapowanie hostów → parser (logiczny). Produkcja: iaai.com (często zapisywane jako IAI).",
+  "schemaVersion": 1,
+  "parsers": {
+    "IAI_USA": {
+      "hosts": ["iaai.com", "www.iaai.com"],
+      "parser": "parseIaiUsa",
+      "sourceId": "IAAI_US"
+    },
+    "IAI_Canada": {
+      "hosts": ["ca.iaai.com"],
+      "parser": "parseIaiCanada",
+      "sourceId": "IAAI_CA"
+    },
+    "Copart_USA": {
+      "hosts": ["copart.com", "www.copart.com"],
+      "parser": "parseCopartUSA",
+      "sourceId": "COPART_US"
+    },
+    "Copart_Canada": {
+      "hosts": ["copart.ca", "www.copart.ca"],
+      "parser": "parseCopartCanada",
+      "sourceId": "COPART_CA"
+    },
+    "Manheim_ADESA": {
+      "hosts": ["manheim-adesa.com", "www.manheim-adesa.com"],
+      "parser": "parseManheim",
+      "sourceId": "MANHEIM_ADESA"
+    },
+    "ProgI": {
+      "hosts": ["progi.com", "www.progi.com", "autoauction.progi.com", "progi.ca", "www.progi.ca"],
+      "parser": "parseProgi",
+      "sourceId": "PROGI_CA"
+    }
+  }
+}

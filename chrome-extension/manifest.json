@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "MrFrik — Aukcje samochodowe",
   "short_name": "MrFrik",
-  "version": "1.2.2",
-  "description": "Twórz oferty Bitrix24 ze stron IAAI i Copart (USA i Kanada) oraz Progi — jednym kliknięciem.",
+  "version": "1.3.0",
+  "description": "Twórz oferty Bitrix24 ze stron IAAI, Copart, Manheim/ADESA i Progi — jednym kliknięciem. Produkcja: folder dist/ po npm run build (PDF Progi).",
   "icons": {
     "16":  "icons/icon16.png",
     "48":  "icons/icon48.png",
@@ -19,7 +19,8 @@
     }
   },
   "permissions": [
-    "storage"
+    "storage",
+    "tabs"
   ],
   "host_permissions": [
     "https://*.iaai.com/*",
@@ -31,6 +32,10 @@
     "https://copart.ca/*",
     "https://*.progi.com/*",
     "https://progi.com/*",
+    "https://*.progi.ca/*",
+    "https://progi.ca/*",
+    "https://*.manheim-adesa.com/*",
+    "https://manheim-adesa.com/*",
     "https://mrfrik.com/mrfrik/*",
     "https://*.bitrix24.pl/*",
     "https://*.bitrix24.com/*"
@@ -56,7 +61,11 @@
         "https://*.copart.ca/*",
         "https://copart.ca/*",
         "https://*.progi.com/*",
-        "https://progi.com/*"
+        "https://progi.com/*",
+        "https://*.progi.ca/*",
+        "https://progi.ca/*",
+        "https://*.manheim-adesa.com/*",
+        "https://manheim-adesa.com/*"
       ],
       "js": ["auction-sources.js", "content-auction.js"],
       "run_at": "document_idle",

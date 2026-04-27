@@ -1,0 +1,104 @@
+{
+  "manifest_version": 3,
+  "name": "MrFrik — Aukcje samochodowe",
+  "short_name": "MrFrik",
+  "version": "1.3.0",
+  "description": "Twórz oferty Bitrix24 ze stron IAAI, Copart, Manheim/ADESA i Progi (USA/Kanada) — jednym kliknięciem.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "MrFrik — Aukcje",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "permissions": [
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://*.iaai.com/*",
+    "https://ca.iaai.com/*",
+    "https://*.copart.com/*",
+    "https://copart.com/*",
+    "https://www.copart.com/*",
+    "https://*.copart.ca/*",
+    "https://copart.ca/*",
+    "https://*.progi.com/*",
+    "https://progi.com/*",
+    "https://*.progi.ca/*",
+    "https://progi.ca/*",
+    "https://*.manheim-adesa.com/*",
+    "https://manheim-adesa.com/*",
+    "https://mrfrik.com/mrfrik/*",
+    "https://*.bitrix24.pl/*",
+    "https://*.bitrix24.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://mrfrik.com/mrfrik/*",
+        "https://*.bitrix24.pl/*",
+        "https://*.bitrix24.com/*"
+      ],
+      "js": [
+        "contentDetect.bundle.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "https://*.iaai.com/*",
+        "https://ca.iaai.com/*",
+        "https://*.copart.com/*",
+        "https://copart.com/*",
+        "https://www.copart.com/*",
+        "https://*.copart.ca/*",
+        "https://copart.ca/*",
+        "https://*.progi.com/*",
+        "https://progi.com/*",
+        "https://*.progi.ca/*",
+        "https://progi.ca/*",
+        "https://*.manheim-adesa.com/*",
+        "https://manheim-adesa.com/*"
+      ],
+      "js": [
+        "contentAuction.bundle.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "background": {
+    "service_worker": "background.bundle.js"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "pdf.worker.min.js"
+      ],
+      "matches": [
+        "https://*.iaai.com/*",
+        "https://ca.iaai.com/*",
+        "https://*.copart.com/*",
+        "https://copart.com/*",
+        "https://www.copart.com/*",
+        "https://*.copart.ca/*",
+        "https://copart.ca/*",
+        "https://*.progi.com/*",
+        "https://progi.com/*",
+        "https://*.progi.ca/*",
+        "https://progi.ca/*",
+        "https://*.manheim-adesa.com/*",
+        "https://manheim-adesa.com/*"
+      ]
+    }
+  ]
+}

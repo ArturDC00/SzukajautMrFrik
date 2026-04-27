@@ -1,0 +1,1 @@
+{"version":3,"file":"background.bundle.js","mappings":";;;;AAAA;AACA;AACA;AACA","sources":["webpack://autostore-szukaj-aut-extensions/./background.js"],"sourcesContent":["// Service worker — minimal, used only for install event\r\nchrome.runtime.onInstalled.addListener(() => {\r\n  console.log('[MrFrik] Rozszerzenie zainstalowane.');\r\n});\r\n"],"names":[],"sourceRoot":""}

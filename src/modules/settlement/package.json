@@ -1,0 +1,14 @@
+{
+  "name": "@automekka/settlement-module",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p .",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "typescript": "~5.4.0",
+    "vitest": "^2.1.9"
+  }
+}

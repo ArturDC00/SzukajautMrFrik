@@ -165,18 +165,33 @@
       panelColor: '#6f42c1',
       accentHover: '#5a2d9e',
     },
+    MANHEIM_ADESA: {
+      id: 'MANHEIM_ADESA',
+      label: 'Manheim / ADESA',
+      country: 'US',
+      currency: 'USD',
+      sourceEnum: null,
+      fabColor: '#1a5f8a',
+      panelColor: '#1a5f8a',
+      accentHover: '#154a6e',
+    },
   };
 
   function getSourceByHost(hostname) {
     const h = String(hostname).replace(/^www\./, '').toLowerCase();
     if (h === 'ca.iaai.com' || h.endsWith('.ca.iaai.com')) return SOURCES.IAAI_CA;
     if (h.endsWith('copart.ca')) return SOURCES.COPART_CA;
-    // Progi: produkcyjnie często autoauction.*; czasem samo progi.com / www
+    if (h === 'manheim-adesa.com' || h.endsWith('.manheim-adesa.com')) {
+      return SOURCES.MANHEIM_ADESA;
+    }
+    // Progi: produkcyjnie często autoauction.*; .progi.ca / .progi.com
     if (
       h === 'progi.com' ||
       h.endsWith('.progi.com') ||
       h === 'autoauction.progi.com' ||
-      h.endsWith('.autoauction.progi.com')
+      h.endsWith('.autoauction.progi.com') ||
+      h === 'progi.ca' ||
+      h.endsWith('.progi.ca')
     ) {
       return SOURCES.PROGI_CA;
     }

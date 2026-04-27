@@ -15,10 +15,100 @@
   })();
 
   if (typeof FrikAuctionSources === 'undefined') { return; }
-  const HOST   = location.hostname.replace(/^www\./, '');
+  const HOST = location.hostname.replace(/^www\./, '');
   const sourceConfig = FrikAuctionSources.getSourceByHost(HOST);
+
+  let frikSending = false;
+
+  chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
+    if (msg.type === 'FRIK_GET_STATUS') {
+      if (!sourceConfig) {
+        sendResponse({
+          supported: false,
+          detailPage: false,
+          host: HOST,
+          sending: false,
+          parseCode: 'unknown',
+          message: 'Ten adres nie jest obsługiwaną aukcją',
+          canSend: false,
+        });
+        return true;
+      }
+      sendResponse(buildAuctionStatusPayload());
+      return true;
+    }
+    if (msg.type === 'FRIK_CREATE_QUOTE') {
+      if (!sourceConfig) {
+        sendResponse({ ok: false, error: 'Nieobsługiwany adres' });
+        return true;
+      }
+      runQuoteFromPopupAsync()
+        .then(function (quoteId) {
+          sendResponse({ ok: true, quoteId: quoteId });
+        })
+        .catch(function (err) {
+          sendResponse({ ok: false, error: (err && err.message) ? err.message : String(err) });
+        });
+      return true;
+    }
+    return false;
+  });
+
+  function buildAuctionStatusPayload() {
+    var snap = getParseSnapshot();
+    return {
+      supported: true,
+      host: HOST,
+      sourceId: sourceConfig.id,
+      sourceLabel: sourceConfig.label,
+      sending: frikSending,
+      detailPage: snap.detailPage,
+      parseCode: snap.code,
+      message: snap.message,
+      canSend: !!(snap.detailPage && snap.canSendFields && !frikSending),
+    };
+  }
+
+  function getParseSnapshot() {
+    var dp = isDetailPage();
+    if (!dp) {
+      return {
+        detailPage: false,
+        code: 'list',
+        message: 'To nie jest strona pojazdu (np. lista lub wyszukiwarka)',
+        canSendFields: false,
+      };
+    }
+    try {
+      var data = extractData();
+      var hasCore = !!(data.vin || data.vehicleTitle || data.year);
+      return {
+        detailPage: true,
+        code: hasCore ? 'ok' : 'warn',
+        message: hasCore
+          ? 'Dane rozpoznane'
+          : 'Brak kluczowych pól — poczekaj na załadowanie lub użyj PDF (Progi)',
+        canSendFields: hasCore,
+      };
+    } catch (e) {
+      return {
+        detailPage: true,
+        code: 'error',
+        message: (e && e.message) ? e.message : 'Błąd parsowania',
+        canSendFields: false,
+      };
+    }
+  }
+
   if (!sourceConfig) return;
-  try { console.info('[MrFrik] content-auction', '1.2.2'); } catch (_) {}
+
+  try {
+    console.info(
+      '[MrFrik] content-auction',
+      typeof __FRIK_EXTENSION_VERSION__ !== 'undefined' ? __FRIK_EXTENSION_VERSION__ : 'dev',
+    );
+  } catch (_) {}
+
   const ACCENT      = sourceConfig.fabColor;
   const ACCENT_DARK = sourceConfig.accentHover;
 
@@ -45,6 +135,12 @@
     if (sourceConfig.id === 'PROGI_CA') {
       if (path.includes('/search') || path === '/' || /\/(login|signin)/.test(path)) return false;
       return /(vehicle|lot|inventory|item|detail|listing|auction|sale)/.test(path) && !path.endsWith('/search');
+    }
+    if (sourceConfig.id === 'MANHEIM_ADESA') {
+      if (/(login|signin|register)/.test(path)) return false;
+      if (path === '/' || path.endsWith('/search') || /\/search\//.test(path)) return false;
+      return /(vehicle|listing|inventory|auction|sale|detail|lot|vdp|offering|simulcast|lane)/.test(path)
+        || /\/\d{5,12}(?:\/|$)/.test(path);
     }
     return false;
   }
@@ -523,8 +619,18 @@
     };
   }
 
+  function extractManheim() {
+    return extractStandard();
+  }
+
   function extractData() {
-    if (sourceConfig.id === 'PROGI_CA') return extractProgi();
+    if (sourceConfig.id === 'PROGI_CA') {
+      if (typeof window !== 'undefined' && window.frikProgiPdfMerged) {
+        return window.frikProgiPdfMerged;
+      }
+      return extractProgi();
+    }
+    if (sourceConfig.id === 'MANHEIM_ADESA') return extractManheim();
     return extractStandard();
   }
 
@@ -537,6 +643,29 @@
     if (d.odometerMi) return `Przebieg: ${d.odometerMi.toLocaleString('pl')} mil`;
     if (d.odometer)   return `Przebieg: ${d.odometer.toLocaleString('pl')} mil`;
     return null;
+  }
+
+  function buildStructuredPayloadRecord(d) {
+    return {
+      schemaVersion: 1,
+      sourceId: sourceConfig.id,
+      sourceLabel: sourceConfig.label,
+      vin: d.vin || null,
+      make: d.make || null,
+      model: d.model || null,
+      year: d.year != null ? d.year : null,
+      vehicleTitle: d.vehicleTitle || null,
+      priceOrEstimate: d.estimatedValue != null ? d.estimatedValue : null,
+      currency: d.currency || null,
+      location: d.location || null,
+      locationMeta: d.locationMeta || null,
+      odometerKm: d.odometerKm != null ? d.odometerKm : null,
+      odometerMi: d.odometerMi != null ? d.odometerMi : null,
+      lotNumber: d.lotNumber || null,
+      auctionUrl: d.auctionUrl || null,
+      images: (d.images || []).slice(0, 12),
+      pdfFallbackUsed: !!d.pdfFallbackUsed,
+    };
   }
 
   function buildComments(d) {
@@ -569,6 +698,9 @@
       '',
       d.auctionUrl  ? `Link aukcji: ${d.auctionUrl}`              : null,
     ].filter(x => x !== null);
+    lines.push('');
+    lines.push('--- FRIK_PAYLOAD_JSON ---');
+    lines.push(JSON.stringify(buildStructuredPayloadRecord(d)));
     return lines.join('\n');
   }
 
@@ -828,6 +960,39 @@
     } catch (_) { /* brak webhooka / pole niegotowe */ }
   }
 
+  async function runQuoteFromPopupAsync() {
+    frikSending = true;
+    try {
+      await loadLevelItems();
+      const stored = await chrome.storage.local.get(['frik_deal_id', 'frik_poziom_last']);
+      const dealId = stored.frik_deal_id;
+      if (!dealId) {
+        throw new Error('Brak dealu — ustaw go w zakładce „Szukaj aut” lub wybierz w panelu na stronie aukcji.');
+      }
+      const deals = await loadDeals(false);
+      const d = deals.find(function (x) {
+        return x.id === String(dealId);
+      });
+      const data = extractData();
+      if (!data.vin && !data.vehicleTitle && !data.year) {
+        throw new Error('Strona jeszcze się ładuje — spróbuj ponownie.');
+      }
+      let poziomId = stored.frik_poziom_last ? parseInt(stored.frik_poziom_last, 10) : null;
+      if (!poziomId || isNaN(poziomId)) poziomId = null;
+      const quoteId = await createQuote(
+        data,
+        dealId,
+        poziomId,
+        d && d.contactId,
+        d && d.companyId,
+      );
+      chrome.storage.local.set({ frik_deal_id: String(dealId) });
+      return quoteId;
+    } finally {
+      frikSending = false;
+    }
+  }
+
   // ── Floating action button + panel ────────────────────────────────
   const PANEL_ID = 'frik-panel';
   const FAB_ID   = 'frik-fab';
@@ -862,7 +1027,7 @@
     if (document.getElementById(FAB_ID)) return;
     const fab = document.createElement('button');
     fab.id    = FAB_ID;
-    fab.title = 'MrFrik — Utwórz ofertę w Bitrix24';
+    fab.title = 'MrFrik — Wyślij do Automekki (Bitrix)';
     fab.innerHTML = FAB_ICON;
     fab.style.cssText = [
       'position:fixed', 'bottom:20px', 'right:20px', 'z-index:2147483647',
@@ -899,6 +1064,17 @@
         ).join('')
       : '';
 
+    const progiPdfBlock = sourceConfig.id === 'PROGI_CA'
+      ? `<div id="frik-pdf-wrap" style="margin-bottom:10px;padding:8px;border:1px dashed #c4b8dc;border-radius:6px;background:#faf8ff">
+          <div style="font-size:11px;font-weight:600;color:#666;margin-bottom:6px">PDF z aukcji (fallback)</div>
+          <div id="frik-pdf-drop" style="font-size:12px;color:#444;line-height:1.4;cursor:pointer;padding:8px;border-radius:4px;background:#eee">
+            Przeciągnij PDF (Ctrl+P → Zapisz jako PDF) lub kliknij, by wybrać plik
+          </div>
+          <input type="file" id="frik-pdf-file" accept="application/pdf" style="display:none" />
+          <div id="frik-pdf-hint" style="font-size:11px;color:#888;margin-top:4px"></div>
+        </div>`
+      : '';
+
     const panel = document.createElement('div');
     panel.id = PANEL_ID;
     panel.style.cssText = [
@@ -913,7 +1089,7 @@
       <div id="frik-hdr" style="background:${ACCENT};color:#fff;padding:10px 14px;
            display:flex;align-items:center;justify-content:space-between;
            cursor:move;user-select:none">
-        <span style="font-weight:700">&#128661; MrFrik — Utwórz ofertę</span>
+        <span style="font-weight:700">&#128661; MrFrik — Automekka</span>
         <button id="frik-x" title="Zamknij"
           style="background:none;border:none;color:#fff;font-size:20px;
                  cursor:pointer;padding:0 0 0 10px;line-height:1">×</button>
@@ -948,11 +1124,13 @@
           </select>
         </div>` : ''}
 
+        ${progiPdfBlock}
+
         <button id="frik-create-btn"
           style="width:100%;background:${ACCENT};color:#fff;border:none;
                  border-radius:6px;padding:10px 14px;font-size:13px;font-weight:700;
                  cursor:pointer;font-family:inherit;transition:background .15s">
-          Utwórz ofertę w Bitrix24
+          Wyślij do Automekki
         </button>
         <div id="frik-status"
           style="margin-top:8px;font-size:12px;display:none;padding:8px 10px;
@@ -960,6 +1138,63 @@
       </div>`;
 
     document.body.appendChild(panel);
+
+    if (sourceConfig.id === 'PROGI_CA') {
+      const drop = document.getElementById('frik-pdf-drop');
+      const finput = document.getElementById('frik-pdf-file');
+      const hint = document.getElementById('frik-pdf-hint');
+      function handlePdfFile(file) {
+        if (!file || file.type !== 'application/pdf') {
+          if (hint) hint.textContent = 'Wybierz plik PDF.';
+          return;
+        }
+        const Pdf = typeof self !== 'undefined' ? self.FrikPdfProgi : null;
+        if (!Pdf || !Pdf.extractTextFromPdfBuffer || !Pdf.mergeProgiPlainTextIntoData) {
+          if (hint) {
+            hint.textContent = 'PDF wymaga zbudowanego rozszerzenia (npm run build w chrome-extension/).';
+          }
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = function () {
+          Promise.resolve()
+            .then(function () {
+              if (hint) hint.textContent = 'Odczyt PDF…';
+              return Pdf.extractTextFromPdfBuffer(reader.result);
+            })
+            .then(function (text) {
+              const base = extractProgi();
+              window.frikProgiPdfMerged = Pdf.mergeProgiPlainTextIntoData(text, base);
+              if (hint) hint.textContent = '✓ Dane z PDF połączono z podglądem — możesz wysłać.';
+            })
+            .catch(function (e) {
+              if (hint) hint.textContent = 'Błąd PDF: ' + ((e && e.message) ? e.message : e);
+            });
+        };
+        reader.readAsArrayBuffer(file);
+      }
+      if (drop && finput) {
+        drop.addEventListener('click', function () { finput.click(); });
+        drop.addEventListener('dragover', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          drop.style.background = '#e0dcf5';
+        });
+        drop.addEventListener('dragleave', function () { drop.style.background = '#eee'; });
+        drop.addEventListener('drop', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          drop.style.background = '#eee';
+          const f = e.dataTransfer.files && e.dataTransfer.files[0];
+          handlePdfFile(f);
+        });
+        finput.addEventListener('change', function () {
+          const f = finput.files && finput.files[0];
+          handlePdfFile(f);
+          finput.value = '';
+        });
+      }
+    }
 
     // Close
     document.getElementById('frik-x').onclick = removePanel;
@@ -1030,7 +1265,7 @@
 
       createBtn.disabled = true;
       createBtn.style.background = '#888';
-      createBtn.textContent = 'Tworzę ofertę…';
+      createBtn.textContent = '⏳ Wysyłanie do Bitrix…';
 
       try {
         const quoteId = await createQuote(data, dealIdVal, poziomId, selContactId, selCompanyId);
@@ -1046,19 +1281,21 @@
           'ok'
         );
 
-        // Remember this deal for next vehicle
-        chrome.storage.local.set({ frik_deal_id: String(dealIdVal) });
+        // Remember this deal + poziom dla popup „Wyślij”
+        const persist = { frik_deal_id: String(dealIdVal) };
+        if (poziomId) persist.frik_poziom_last = String(poziomId);
+        chrome.storage.local.set(persist);
 
         setTimeout(() => {
           createBtn.disabled = false;
           createBtn.style.background = ACCENT;
-          createBtn.textContent = 'Utwórz ofertę w Bitrix24';
+          createBtn.textContent = 'Wyślij do Automekki';
         }, 8000);
       } catch (err) {
         showStatus('Błąd: ' + err.message, 'error');
         createBtn.disabled = false;
         createBtn.style.background = ACCENT;
-        createBtn.textContent = 'Utwórz ofertę w Bitrix24';
+        createBtn.textContent = 'Wyślij do Automekki';
       }
     });
 
@@ -1134,6 +1371,9 @@
   }
 
   function onNavigate() {
+    try {
+      if (typeof window !== 'undefined') window.frikProgiPdfMerged = null;
+    } catch (_) {}
     if (injectTid) clearTimeout(injectTid);
     clearFabPoll();
     removeFab();

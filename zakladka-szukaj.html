@@ -240,14 +240,34 @@ let dealId    = null;
 let bxDomain  = null;
 
 // ── Extension detection — runs IMMEDIATELY, independent of BX24.init ─────
-// (content-detect.js fires at document_start and dispatches 'frik-ext-ping')
+// content-detect.js (MV3): document_start + frik-ext-ping; w iframe bywa opóźnienie — nie kończ za wcześnie.
 (function initExtDetection() {
-  // „Wykryto wtyczkę” musi móc nadpisać wcześniejszy wynik z timera (content script czasem >2 s).
   let extDetected = false;
+  let pollTimerId = null;
+  let failTimerId = null;
+  var attrObserver = null;
+
+  function clearTimers() {
+    if (pollTimerId != null) {
+      clearInterval(pollTimerId);
+      pollTimerId = null;
+    }
+    if (failTimerId != null) {
+      clearTimeout(failTimerId);
+      failTimerId = null;
+    }
+    try {
+      if (attrObserver) {
+        attrObserver.disconnect();
+        attrObserver = null;
+      }
+    } catch (_) {}
+  }
 
   function setExtStatus(installed) {
     if (installed) {
       extDetected = true;
+      clearTimers();
     } else if (extDetected) {
       return;
     }
@@ -257,37 +277,57 @@ let bxDomain  = null;
     const msg        = document.getElementById('extMsg');
     const installBtn = document.getElementById('extInstallBtn');
     const noExtMsg   = document.getElementById('noExtMsg');
+    if (!bar || !dot || !msg) return;
 
     if (installed) {
-      bar.className        = 'ext-bar ok';
-      dot.className        = 'ext-dot ok';
-      msg.textContent      = 'Wtyczka MrFrik aktywna ✓';
-      installBtn.style.display = 'none';
-      noExtMsg.style.display   = 'none';
+      bar.className            = 'ext-bar ok';
+      dot.className            = 'ext-dot ok';
+      msg.textContent          = 'Wtyczka MrFrik aktywna ✓';
+      if (installBtn) installBtn.style.display = 'none';
+      if (noExtMsg) noExtMsg.style.display   = 'none';
     } else {
-      bar.className        = 'ext-bar bad';
-      dot.className        = 'ext-dot bad';
-      msg.textContent      = 'Wtyczka nie jest zainstalowana';
-      installBtn.style.display = 'inline-block';
-      noExtMsg.style.display   = 'block';
+      bar.className            = 'ext-bar bad';
+      dot.className            = 'ext-dot bad';
+      msg.textContent          = 'Wtyczka nie jest zainstalowana';
+      if (installBtn) installBtn.style.display = 'inline-block';
+      if (noExtMsg) noExtMsg.style.display   = 'block';
     }
   }
 
-  // 1. Immediate check — attribute set by content-detect.js at document_start
-  if (document.documentElement.getAttribute('data-frik-ext') === '1') {
-    setExtStatus(true);
-    return;
+  function checkAttr() {
+    if (document.documentElement.getAttribute('data-frik-ext') === '1') {
+      setExtStatus(true);
+      return true;
+    }
+    return false;
   }
 
-  // 2. Listen for the CustomEvent dispatched by content-detect.js after DOMContentLoaded
+  // 1. Od razu
+  if (checkAttr()) return;
+
+  // 2. Zdarzenie z content-detect.js (może przyjść późno — bez { once })
   window.addEventListener('frik-ext-ping', function () {
     setExtStatus(true);
-  }, { once: true });
+  });
 
-  // 3. Fallback: po dłuższym czasie bez sygnału → brak wtyczki (MV3 bywa wolny w iframe)
-  setTimeout(function () {
+  // 3. MutationObserver na data-frik-ext
+  try {
+    attrObserver = new MutationObserver(function () {
+      if (checkAttr()) clearTimers();
+    });
+    attrObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-frik-ext'] });
+  } catch (_) {}
+
+  // 4. Polling (MV3 / iframe — czasem kilka sekund opóźnienia)
+  pollTimerId = window.setInterval(function () {
+    checkAttr();
+  }, 350);
+
+  // 5. „Brak wtyczki” dopiero po ~15 s — wcześniejszy timeout dawał fałszywy alarm
+  failTimerId = window.setTimeout(function () {
+    clearTimers();
     setExtStatus(false);
-  }, 5000);
+  }, 15000);
 })();
 
 // ── Bitrix24 init (tylko w iframe CRM — poza Bitrixem BX24 nie istnieje / init rzuca) ──

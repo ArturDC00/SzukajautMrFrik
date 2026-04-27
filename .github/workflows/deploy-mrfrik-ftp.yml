@@ -32,6 +32,28 @@ jobs:
       - name: Build artifacts (extension + HTML → deploy/)
         run: bash scripts/build-deploy-artifacts.sh
 
+      # Bez tych sekretów SamKirkland/FTP-Deploy-Action kończy się: Input required and not supplied: server
+      - name: Sprawdź sekrety FTP
+        env:
+          FTP_SERVER: ${{ secrets.FTP_SERVER }}
+          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+          FTP_REMOTE_DIR: ${{ secrets.FTP_REMOTE_DIR }}
+        run: |
+          missing=0
+          if [ -z "$FTP_SERVER" ]; then echo "::error::Brak sekretu FTP_SERVER"; missing=1; fi
+          if [ -z "$FTP_USERNAME" ]; then echo "::error::Brak sekretu FTP_USERNAME"; missing=1; fi
+          if [ -z "$FTP_PASSWORD" ]; then echo "::error::Brak sekretu FTP_PASSWORD"; missing=1; fi
+          if [ -z "$FTP_REMOTE_DIR" ]; then echo "::error::Brak sekretu FTP_REMOTE_DIR"; missing=1; fi
+          if [ "$missing" -ne 0 ]; then
+            echo ""
+            echo "Ustaw w GitHub: Repozytorium → Settings → Secrets and variables → Actions → New repository secret"
+            echo "Nazwy dokładnie: FTP_SERVER, FTP_USERNAME, FTP_PASSWORD, FTP_REMOTE_DIR"
+            echo "FTP_SERVER = host (np. 135.125.243.231 lub ftp.twojadomena.pl)"
+            echo "FTP_REMOTE_DIR = pełna ścieżka na serwerze, np. /var/www/mrfrik/public/mrfrik/ (sprawdź w panelu hostingu)"
+            exit 1
+          fi
+
       - name: FTP upload
         uses: SamKirkland/FTP-Deploy-Action@v4.3.6
         with:

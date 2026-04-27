@@ -91,7 +91,9 @@ jobs:
             "mkdir -p \"${SSH_REMOTE_DIR}\" && test -w \"${SSH_REMOTE_DIR}\" && ls -lad \"${SSH_REMOTE_DIR}\""
 
           echo "→ rsync ./deploy/ → host"
-          rsync -avz --delete \
+          # Bez -a: przy właścicielu www-data rsync często kończy kodem 23 („failed to set times … Operation not permitted”).
+          # -rlvz = rekursja + linki + verbose + gzip; bez zachowywania czasu/atrybutów jak z -a.
+          rsync -rlvz --delete \
             -e "ssh $SSH_OPTS" \
             ./deploy/ "$DEST"
 

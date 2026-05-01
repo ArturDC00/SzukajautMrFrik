@@ -1,7 +1,8 @@
 {
-  "_usage": "Domyślne UF jak zakładka Oferta / CONFIG rozliczenia. Puste QUOTE_* = nie wysyłaj lub auto z XML_ID (FRIK_AUCTION_*). Nadpisanie: chrome.storage frik_quote_uf_json (obiekt JSON).",
+  "_usage": "Domyślne UF jak zakładka Oferta / CONFIG rozliczenia. Puste QUOTE_* = nie wysyłaj lub auto z XML_ID (FRIK_*). Biblioteka zdjęć: QUOTE_PHOTO_LIBRARY_FIELD → XML_ID FRIK_QUOTE_BIBLIOTEKA_ZDJEC w CRM. Nadpisanie: chrome.storage frik_quote_uf_json.",
   "QUOTE_EST_PRICE_FIELD": "UF_CRM_QUOTE_1749798603485",
   "QUOTE_SOURCE_FIELD": "UF_CRM_QUOTE_1775199244953",
+  "QUOTE_PHOTO_LIBRARY_FIELD": "",
   "QUOTE_PHOTOS_HTML_FIELD": "",
   "SOURCE_ENUM_IAAI": 3089,
   "SOURCE_ENUM_COPART": 3091,

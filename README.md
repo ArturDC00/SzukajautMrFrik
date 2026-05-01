@@ -2,6 +2,16 @@
 
 MrFrik — zakładka Bitrix24 „Szukaj aut” oraz rozszerzenie Chrome do tworzenia ofert z aukcji (IAAI, Copart, Progi; wersja z obsługą Kanady i parserem prowincji).
 
+## Podział z repozytorium platformy (Next.js)
+
+Pełna tabela odpowiedzialności (**mrfrik-platform** vs **Szukaj aut**), C4, D1, E2, sekrety i webhooki — jest utrzymywana w jednym miejscu:
+
+**[mrfrik-platform — `docs/ZAKRES-repo-platform-vs-szukaj-aut.md`](https://github.com/ArturDC00/mrfrik-platform/blob/main/docs/ZAKRES-repo-platform-vs-szukaj-aut.md)**
+
+Lokalny skrót: [`docs/ZAKRES-repo-platform-vs-szukaj-aut.md`](docs/ZAKRES-repo-platform-vs-szukaj-aut.md) (tylko link; bez duplikatu treści).
+
+**Bezpieczeństwo:** inbound webhook Bitrix i `INTERNAL_API_KEY` platformy nie powinny trafiać do commitów publicznych. Jeśli wyciekły — unieważnij webhook w Bitrix i sekrety w GitHub/Vercel.
+
 ## Struktura
 
 - `chrome-extension/` — rozszerzenie Chrome (manifest, `content-auction.js`, `auction-sources.js`, popup z webhookiem)
@@ -12,7 +22,7 @@ MrFrik — zakładka Bitrix24 „Szukaj aut” oraz rozszerzenie Chrome do tworz
 ## Wymagania
 
 - Do scrapera: Node.js, `npm install` w `frik-scraper/`
-- Wtyczka: Chrome / Chromium, własny URL webhooka Bitrix zapisany w menu rozszerzenia
+- Wtyczka: Chrome / Chromium; URL inbound webhooka Bitrix — w popupie rozszerzenia lub opcjonalnie w `chrome-extension/install-defaults.js` **przed** buildem paczki (nie commituj tokenu)
 
 ## Konfiguracja
 

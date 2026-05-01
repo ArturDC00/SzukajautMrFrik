@@ -16,6 +16,17 @@ function showUfPhotosStatus(msg, ok) {
   el.textContent = msg || '';
   el.style.color = ok ? '#34b251' : ok === false ? '#e53935' : '#888';
 }
+function showUfFilesStatus(msg, ok) {
+  const el = $('ufFilesStatus');
+  el.textContent = msg || '';
+  el.style.color = ok ? '#34b251' : ok === false ? '#e53935' : '#888';
+}
+function showPlatformCdnStatus(msg, ok) {
+  const el = $('platformCdnStatus');
+  if (!el) return;
+  el.textContent = msg || '';
+  el.style.color = ok ? '#34b251' : ok === false ? '#e53935' : '#888';
+}
 function renderAuctionStatus(resp) {
   const line = $('auctionStatusLine');
   const hint = $('auctionDetailHint');
@@ -132,10 +143,14 @@ $('btnSendAutomekka').addEventListener('click', function () {
     });
   });
 });
-chrome.storage.local.get(['frik_webhook', 'frik_deal_id', 'frik_domain', 'frik_quote_auction_photos_uf'], data => {
+chrome.storage.local.get(['frik_webhook', 'frik_deal_id', 'frik_domain', 'frik_quote_auction_photos_uf', 'frik_quote_auction_files_uf', 'frik_platform_cdn_enabled', 'frik_platform_ingest_url', 'frik_platform_ingest_key'], data => {
   if (data.frik_webhook) {
     $('webhookInput').value = data.frik_webhook;
     showWebhookStatus('Zapisano ✓', true);
+  }
+  if (data.frik_quote_auction_files_uf) {
+    $('ufAuctionFiles').value = data.frik_quote_auction_files_uf;
+    showUfFilesStatus('Zapisano ✓', true);
   }
   if (data.frik_quote_auction_photos_uf) {
     $('ufAuctionPhotos').value = data.frik_quote_auction_photos_uf;
@@ -151,6 +166,16 @@ chrome.storage.local.get(['frik_webhook', 'frik_deal_id', 'frik_domain', 'frik_q
   }
   if (data.frik_domain) {
     $('portalVal').textContent = data.frik_domain;
+  }
+  if ($('platformCdnEnabled')) {
+    $('platformCdnEnabled').checked = !!data.frik_platform_cdn_enabled;
+  }
+  if ($('platformIngestUrl') && data.frik_platform_ingest_url) {
+    $('platformIngestUrl').value = data.frik_platform_ingest_url;
+  }
+  if ($('platformIngestKey') && data.frik_platform_ingest_key) {
+    $('platformIngestKey').value = data.frik_platform_ingest_key;
+    showPlatformCdnStatus('Zapisano ✓ (klucz w pamięci lokalnej)', true);
   }
 });
 refreshAuctionTabStatus();
@@ -195,6 +220,56 @@ $('saveUfPhotos').addEventListener('click', () => {
     showUfPhotosStatus('Zapisano ✓', true);
   });
 });
+$('saveUfFiles').addEventListener('click', () => {
+  const v = ($('ufAuctionFiles').value || '').trim();
+  if (!v) {
+    chrome.storage.local.remove('frik_quote_auction_files_uf', () => {
+      showUfFilesStatus('Wyczyszczono — używane będzie tylko HTML / komentarz.', false);
+    });
+    return;
+  }
+  const norm = v.replace(/^uf_crm_/i, 'UF_CRM_');
+  if (!/^UF_CRM_[A-Z0-9_]+$/i.test(norm)) {
+    showUfFilesStatus('Format: UF_CRM_QUOTE_… (litery, cyfry, _)', false);
+    return;
+  }
+  chrome.storage.local.set({
+    frik_quote_auction_files_uf: norm
+  }, () => {
+    $('ufAuctionFiles').value = norm;
+    showUfFilesStatus('Zapisano ✓', true);
+  });
+});
+if ($('savePlatformCdn')) {
+  $('savePlatformCdn').addEventListener('click', () => {
+    const cb = $('platformCdnEnabled');
+    const enabled = !!(cb && cb.checked);
+    const urlIn = $('platformIngestUrl');
+    const keyIn = $('platformIngestKey');
+    const url = (urlIn && urlIn.value || '').trim();
+    const key = (keyIn && keyIn.value || '').trim();
+    if (enabled && (!url || !key)) {
+      showPlatformCdnStatus('Włączone CDN wymaga pełnego URL ingest i klucza.', false);
+      return;
+    }
+    if (url) {
+      try {
+        const u = new URL(url.match(/^https?:\/\//i) ? url : 'https://' + url);
+        if (!u.hostname) throw new Error('bad');
+      } catch (e) {
+        showPlatformCdnStatus('Nieprawidłowy URL ingest.', false);
+        return;
+      }
+    }
+    chrome.storage.local.set({
+      frik_platform_cdn_enabled: enabled,
+      frik_platform_ingest_url: url,
+      frik_platform_ingest_key: key
+    }, () => {
+      showPlatformCdnStatus('Zapisano ✓', true);
+    });
+  });
+}
 $('clearDeal').addEventListener('click', () => {
   chrome.storage.local.remove(['frik_deal_id', 'frik_domain'], () => {
     const el = $('dealIdVal');

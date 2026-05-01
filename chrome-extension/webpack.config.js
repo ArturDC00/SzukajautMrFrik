@@ -105,6 +105,7 @@ module.exports = {
         { from: 'icons', to: 'icons' },
         { from: 'auction-config.json', to: '.' },
         { from: 'bitrix-quote-fields.json', to: '.' },
+        { from: 'install-defaults.js', to: 'install-defaults.js', noErrorOnMissing: false },
         {
           from: path.join(__dirname, 'node_modules/pdfjs-dist/build/pdf.worker.min.js'),
           to: 'pdf.worker.min.js',

@@ -83,15 +83,36 @@
   <input type="url" class="webhook-input" id="webhookInput" placeholder="https://portal.bitrix24.pl/rest/…" autocomplete="off" />
   <button class="save-btn" type="button" id="saveWebhook">Zapisz webhook</button>
   <div class="lbl" id="webhookStatus" style="margin-top:6px"></div>
-  <div class="save-hint">Wklej pełny URL webhooka z Bitrix24 (Applications → Webhook). Bez tego wtyczka nie utworzy oferty.</div>
+  <div class="save-hint">Opcjonalnie przed zipem możesz ustawić URL w <code>install-defaults.js</code> (nie commituj tokenu). Inaczej wklej webhook poniżej i zapisz.</div>
 </div>
 
 <div class="info-block">
-  <div class="lbl">Pole oferty — zdjęcia z aukcji (opcjonalnie):</div>
+  <div class="lbl">Pole oferty — zdjęcia jako pliki w CRM (zalecane):</div>
+  <input type="text" class="webhook-input" id="ufAuctionFiles" placeholder="puste = „Biblioteka zdjęć” (XML_ID)" autocomplete="off" spellcheck="false" />
+  <button class="save-btn" type="button" id="saveUfFiles">Zapisz pole pliku</button>
+  <div class="lbl" id="ufFilesStatus" style="margin-top:6px"></div>
+  <div class="save-hint">Docelowo pole <strong>Biblioteka zdjęć</strong> na ofercie — w CRM ustaw dla tego UF <strong>XML_ID = FRIK_QUOTE_BIBLIOTEKA_ZDJEC</strong>, wtedy wtyczka sama znajdzie kod UF (resolves przez webhook). Opcjonalnie wpisz tu ręcznie <code>UF_CRM_QUOTE_…</code> zamiast XML. Pobieranie: pierwsze udane zdjęcie z URL-a aukcji → plik w Bitrix (nie hotlink).</div>
+</div>
+
+<div class="info-block">
+  <div class="lbl">Pole oferty — zdjęcia HTML (opcjonalnie, legacy):</div>
   <input type="text" class="webhook-input" id="ufAuctionPhotos" placeholder="np. UF_CRM_QUOTE_1234567890" autocomplete="off" spellcheck="false" />
   <button class="save-btn" type="button" id="saveUfPhotos">Zapisz kod pola</button>
   <div class="lbl" id="ufPhotosStatus" style="margin-top:6px"></div>
   <div class="save-hint">Nazwa pola użytkownika w <strong>Ofercie</strong> (CRM → Ustawienia → Oferty → Pola), typ zwykle <strong>HTML</strong> lub długi tekst. Gdy ustawione, galeria jest w pierwszym zapisie oferty (jak pole <code>QUOTE_PHOTOS_HTML_FIELD</code> w <code>bitrix-quote-fields.json</code>). Pełna mapa VIN/marka/model itd.: ten plik w paczce wtyczki lub pole <code>frik_quote_uf_json</code> w storage.</div>
+</div>
+
+<div class="info-block">
+  <div class="lbl">Portal — miniaturka CDN (opcjonalnie, repo platformy C4)</div>
+  <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:12px;cursor:pointer">
+    <input type="checkbox" id="platformCdnEnabled" />
+    Po pierwszym udanym zdjęciu w CRM wyślij kopię na platformę (S3 + UF URL)
+  </label>
+  <input type="url" class="webhook-input" id="platformIngestUrl" placeholder="https://…/api/offers/portal-thumbnail-ingest" autocomplete="off" />
+  <input type="password" class="webhook-input" id="platformIngestKey" placeholder="INTERNAL_API_KEY (tylko komputer zaufany)" autocomplete="off" style="margin-top:6px" />
+  <button class="save-btn" type="button" id="savePlatformCdn">Zapisz ustawienia CDN</button>
+  <div class="lbl" id="platformCdnStatus" style="margin-top:6px"></div>
+  <div class="save-hint">Ten sam klucz co nagłówek <code>x-internal-api-key</code> na serwerze platformy. Nie udostępniaj — traktuj jak hasło. Dev: <code>http://localhost:3000/api/offers/portal-thumbnail-ingest</code> (wymaga zgodnego hosta w manifest).</div>
 </div>
 
 <div class="info-block">

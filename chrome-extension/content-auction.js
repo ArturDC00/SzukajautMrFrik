@@ -776,6 +776,119 @@
     });
   }
 
+  /** Base64 bez prefiksu data: — format pliku dla Bitrix REST. */
+  async function blobToBase64Raw(blob) {
+    const buf = await blob.arrayBuffer();
+    let binary = '';
+    const bytes = new Uint8Array(buf);
+    for (let i = 0; i < bytes.byteLength; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
+  }
+
+  function extFromMime(mime) {
+    const m = (mime || '').split(';')[0].trim().toLowerCase();
+    if (m === 'image/jpeg' || m === 'image/jpg') return 'jpg';
+    if (m === 'image/png') return 'png';
+    if (m === 'image/webp') return 'webp';
+    if (m === 'image/gif') return 'gif';
+    return 'jpg';
+  }
+
+  /**
+   * Opcjonalnie C4 (repo platformy): pierwsza miniaturka → S3 + URL na quote.
+   * Konfiguracja w popupie: URL ingest + INTERNAL_API_KEY + checkbox (chrome.storage).
+   */
+  async function maybePortalThumbnailIngest(quoteId, blob) {
+    const st = await new Promise(function (resolve) {
+      chrome.storage.local.get(
+        ['frik_platform_cdn_enabled', 'frik_platform_ingest_url', 'frik_platform_ingest_key'],
+        resolve,
+      );
+    });
+    if (!st.frik_platform_cdn_enabled || !st.frik_platform_ingest_url || !st.frik_platform_ingest_key) {
+      return;
+    }
+    const url = String(st.frik_platform_ingest_url || '').trim();
+    const key = String(st.frik_platform_ingest_key || '').trim();
+    if (!url || !key) return;
+    try {
+      const b64 = await blobToBase64Raw(blob);
+      let ct =
+        blob.type && /^image\//i.test(blob.type)
+          ? blob.type.split(';')[0].trim().toLowerCase()
+          : 'image/jpeg';
+      if (ct === 'image/jpg') ct = 'image/jpeg';
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-internal-api-key': key,
+        },
+        body: JSON.stringify({
+          quoteId: String(quoteId),
+          imageBase64: b64,
+          contentType: ct,
+        }),
+      });
+      if (!resp.ok) {
+        const t = await resp.text().catch(function () {
+          return '';
+        });
+        console.warn('[MrFrik] portal CDN ingest HTTP', resp.status, t.slice(0, 240));
+      }
+    } catch (e) {
+      console.warn('[MrFrik] portal CDN ingest', e);
+    }
+  }
+
+  /**
+   * Pobiera pierwsze działające zdjęcie z URL-i aukcji i zapisuje jako plik w polu UF (nie hotlink).
+   * Zwraca true przy sukcesie crm.quote.update.
+   */
+  async function uploadAuctionImagesAsBitrixFiles(quoteId, imageUrls, whBase, ufKey) {
+    if (!imageUrls || !imageUrls.length || !ufKey) return false;
+    const max = Math.min(imageUrls.length, 10);
+    for (let i = 0; i < max; i++) {
+      try {
+        const r = await fetch(imageUrls[i], {
+          mode: 'cors',
+          credentials: 'omit',
+          referrerPolicy: 'no-referrer',
+        });
+        if (!r.ok) continue;
+        const blob = await r.blob();
+        if (!blob.size) continue;
+        const b64 = await blobToBase64Raw(blob);
+        const ext = extFromMime(blob.type);
+        const fileTuple = ['auction-' + (i + 1) + '.' + ext, b64];
+        const resp = await fetch(whBase + '/crm.quote.update.json', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({
+            id: quoteId,
+            fields: { [ufKey]: fileTuple },
+          }),
+        });
+        const raw = await resp.text();
+        let json;
+        try {
+          json = JSON.parse(raw);
+        } catch (_) {
+          continue;
+        }
+        if (resp.ok && !json.error && json.result !== false) {
+          await maybePortalThumbnailIngest(quoteId, blob);
+          return true;
+        }
+      } catch (e) {
+        console.warn('[MrFrik] upload zdjęcia z aukcji', i, e);
+      }
+    }
+    return false;
+  }
+
   // ── Load recent deals with client names ──────────────────────────
   async function loadDeals(forceRefresh) {
     if (!forceRefresh) {
@@ -861,6 +974,8 @@
   let cachedQuoteFieldMap = null;
 
   const UF_XML_IDS = {
+    /** Pole „Biblioteka zdjęć” (typ: wiele plików / galeria) — w CRM ustaw XML_ID pola na FRIK_QUOTE_BIBLIOTEKA_ZDJEC */
+    QUOTE_PHOTO_LIBRARY_FIELD:     'FRIK_QUOTE_BIBLIOTEKA_ZDJEC',
     QUOTE_PHOTOS_HTML_FIELD:       'FRIK_AUCTION_PHOTOS_HTML',
     QUOTE_VIN_FIELD:               'FRIK_AUCTION_VIN',
     QUOTE_YEAR_FIELD:              'FRIK_AUCTION_YEAR',
@@ -1052,12 +1167,21 @@
 
     applyQuoteAuctionUfs(fields, data, qMap);
 
-    // Galeria HTML w pierwszym żądaniu (jak zakładka Oferta), jeśli znany kod pola.
-    const storedPh = await chrome.storage.local.get('frik_quote_auction_photos_uf');
+    // Zdjęcia: priorytet — pole typu PLIK (fetch URL → base64 → Bitrix); inaczej HTML (hotlink); na końcu komentarz.
+    const storedPh = await chrome.storage.local.get([
+      'frik_quote_auction_photos_uf',
+      'frik_quote_auction_files_uf',
+    ]);
     const ufFromPopup = (storedPh.frik_quote_auction_photos_uf || '').trim();
+    const filesUfManual = (storedPh.frik_quote_auction_files_uf || '').trim();
+    const filesUfFromMap = (qMap.QUOTE_PHOTO_LIBRARY_FIELD || '').trim();
+    const filesUf = filesUfManual || filesUfFromMap;
     const photosKey = (qMap.QUOTE_PHOTOS_HTML_FIELD || '').trim() || ufFromPopup;
     let photosInRequest = false;
-    if (photosKey && isUfCode(photosKey) && data.images && data.images.length > 0) {
+    const useFileUpload =
+      Boolean(filesUf && isUfCode(filesUf) && data.images && data.images.length > 0);
+
+    if (!useFileUpload && photosKey && isUfCode(photosKey) && data.images && data.images.length > 0) {
       fields[photosKey.trim()] = buildAuctionPhotosHtml(data.images);
       photosInRequest = true;
     }
@@ -1087,15 +1211,29 @@
     if (json.error) throw new Error(json.error_description || json.error);
 
     const quoteId = json.result;
-    if (data.images && data.images.length > 0 && !photosInRequest) {
-      const ufStored = await new Promise(r =>
-        chrome.storage.local.get('frik_quote_auction_photos_uf', r)
-      );
-      const ufPhoto = (ufStored.frik_quote_auction_photos_uf || '').trim();
-      if (ufPhoto && /^UF_CRM_[A-Z0-9_]+$/i.test(ufPhoto)) {
-        writeAuctionPhotosToQuoteUf(quoteId, data.images, wh, ufPhoto).catch(function () {});
-      } else {
-        addPhotosComment(quoteId, data.images, wh).catch(function () {});
+    if (data.images && data.images.length > 0) {
+      if (useFileUpload) {
+        const ok = await uploadAuctionImagesAsBitrixFiles(
+          quoteId,
+          data.images,
+          wh,
+          filesUf.trim(),
+        );
+        if (!ok) {
+          const ufPhoto = (storedPh.frik_quote_auction_photos_uf || '').trim();
+          if (ufPhoto && /^UF_CRM_[A-Z0-9_]+$/i.test(ufPhoto)) {
+            await writeAuctionPhotosToQuoteUf(quoteId, data.images, wh, ufPhoto);
+          } else {
+            await addPhotosComment(quoteId, data.images, wh);
+          }
+        }
+      } else if (!photosInRequest) {
+        const ufPhoto = (storedPh.frik_quote_auction_photos_uf || '').trim();
+        if (ufPhoto && /^UF_CRM_[A-Z0-9_]+$/i.test(ufPhoto)) {
+          await writeAuctionPhotosToQuoteUf(quoteId, data.images, wh, ufPhoto);
+        } else {
+          await addPhotosComment(quoteId, data.images, wh);
+        }
       }
     }
     return quoteId;

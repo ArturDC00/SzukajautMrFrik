@@ -346,28 +346,203 @@
 //  KONFIGURACJA
 // ═══════════════════════════════════════════════════════════════════
 const CFG = {
-  // URL scrapera na serwerze (przez nginx proxy)
-  // TODO: podmień na publiczny URL scrapera (patrz frik-scraper/)
-  // Ten sam namespace co zakładki; nginx: /mrfrik/api/ → frik-scraper
   SCRAPER_URL: 'https://app.mrfrik.com',
-  // Ten sam klucz co w .env na serwerze
   SCRAPER_API_KEY: 'tVnlYRFqDxcBvI8MpCKU0XayZ9G4TksbPhguO2JS',
-  // Znane pola w encji Oferta
   QUOTE_EST_PRICE_FIELD:  'UF_CRM_QUOTE_1749798603485',
   QUOTE_SOURCE_FIELD:     'UF_CRM_QUOTE_1775199244953',
-  /** Puste '' = nie zapisuj HTML galerii do osobnego pola. Uzupełnij kod pola typu HTML w ofercie („Zdjęcia z aukcji”). */
-  QUOTE_AUCTION_PHOTOS_UF: '',
   SOURCE_ENUM_IAAI:       3089,
   SOURCE_ENUM_COPART:     3091,
+  // XML_ID dla pól UF oferty — wtyczka/skrypt ensure tworzy je w CRM
+  UF_XML_IDS: {
+    QUOTE_VIN_FIELD:               'FRIK_AUCTION_VIN',
+    QUOTE_YEAR_FIELD:              'FRIK_AUCTION_YEAR',
+    QUOTE_MAKE_FIELD:              'FRIK_AUCTION_MAKE',
+    QUOTE_MODEL_FIELD:             'FRIK_AUCTION_MODEL',
+    QUOTE_LOT_FIELD:               'FRIK_AUCTION_LOT',
+    QUOTE_LOCATION_FIELD:          'FRIK_AUCTION_LOCATION',
+    QUOTE_AUCTION_URL_FIELD:       'FRIK_AUCTION_URL',
+    QUOTE_PRIMARY_DAMAGE_FIELD:    'FRIK_AUCTION_PRIMARY_DAMAGE',
+    QUOTE_SECONDARY_DAMAGE_FIELD:  'FRIK_AUCTION_SECONDARY_DAMAGE',
+    QUOTE_RUN_DRIVE_FIELD:         'FRIK_AUCTION_RUN_DRIVE',
+    QUOTE_SALE_DATE_FIELD:         'FRIK_AUCTION_SALE_DATE',
+    QUOTE_ODOMETER_KM_FIELD:       'FRIK_AUCTION_ODOMETER_KM',
+    QUOTE_PHOTO_LIBRARY_FIELD:     'FRIK_QUOTE_BIBLIOTEKA_ZDJEC',
+  },
 };
 
 // ═══════════════════════════════════════════════════════════════════
 //  STAN
 // ═══════════════════════════════════════════════════════════════════
-let quoteId         = null;
-let currentData     = null;
-let currentSource   = null;
+let quoteId          = null;
+let currentData      = null;
+let currentSource    = null;
 let currentAuctionUrl = null;
+
+// ═══════════════════════════════════════════════════════════════════
+//  DYNAMICZNE MAPOWANIE PÓL UF (po XML_ID w CRM)
+// ═══════════════════════════════════════════════════════════════════
+let cachedUfFieldMap = null;
+
+function isUfCode(s) {
+  return typeof s === 'string' && /^UF_CRM_[A-Z0-9_]+$/i.test(s.trim());
+}
+
+function resolveUfByXmlId(xmlId) {
+  return new Promise(function (resolve, reject) {
+    BX24.callMethod(
+      'crm.quote.userfield.list',
+      { filter: { XML_ID: xmlId } },
+      function (result) {
+        if (result.error()) {
+          reject(new Error(result.error().ex ? result.error().ex.error_description : 'userfield.list error'));
+          return;
+        }
+        const rows = result.data();
+        if (rows && rows.length > 0 && rows[0].FIELD_NAME) {
+          resolve(rows[0].FIELD_NAME);
+        } else {
+          resolve(null);
+        }
+      }
+    );
+  });
+}
+
+async function loadQuoteUfMap() {
+  if (cachedUfFieldMap) return cachedUfFieldMap;
+  const map = {};
+  const xmlIds = CFG.UF_XML_IDS;
+  const keys = Object.keys(xmlIds);
+  for (var i = 0; i < keys.length; i++) {
+    var configKey = keys[i];
+    var xmlId = xmlIds[configKey];
+    if (!xmlId) continue;
+    try {
+      var fieldName = await resolveUfByXmlId(xmlId);
+      if (fieldName && isUfCode(fieldName)) {
+        map[configKey] = fieldName;
+      }
+    } catch (e) {
+      console.warn('[frik] Nie znaleziono UF dla XML_ID=' + xmlId, e);
+    }
+  }
+  cachedUfFieldMap = map;
+  return map;
+}
+
+function applyQuoteAuctionUfs(fields, data) {
+  var map = cachedUfFieldMap || {};
+  function setStr(key, val) {
+    var uf = map[key];
+    if (!uf || !isUfCode(uf)) return;
+    if (val == null || val === '') return;
+    fields[uf.trim()] = typeof val === 'string' ? val : String(val);
+  }
+  setStr('QUOTE_VIN_FIELD', data.vin);
+  setStr('QUOTE_MAKE_FIELD', data.make);
+  setStr('QUOTE_MODEL_FIELD', data.model);
+  setStr('QUOTE_LOT_FIELD', data.lotNumber);
+  setStr('QUOTE_LOCATION_FIELD', data.location);
+  setStr('QUOTE_AUCTION_URL_FIELD', currentAuctionUrl || data.auctionUrl);
+  setStr('QUOTE_PRIMARY_DAMAGE_FIELD', data.primaryDamage);
+  setStr('QUOTE_SECONDARY_DAMAGE_FIELD', data.secondaryDamage);
+  setStr('QUOTE_RUN_DRIVE_FIELD', data.runDrive);
+  setStr('QUOTE_SALE_DATE_FIELD', data.saleDate);
+  if (map.QUOTE_YEAR_FIELD && isUfCode(map.QUOTE_YEAR_FIELD) && data.year != null && data.year !== '') {
+    var y = parseInt(data.year, 10);
+    if (!isNaN(y)) fields[map.QUOTE_YEAR_FIELD.trim()] = y;
+  }
+  var odoKm = data.odometerKm;
+  if (odoKm == null && data.odometerMi != null) {
+    odoKm = Math.round(data.odometerMi * 1.609344);
+  }
+  if (odoKm == null && data.odometer != null) {
+    odoKm = Math.round(data.odometer * 1.609344);
+  }
+  if (map.QUOTE_ODOMETER_KM_FIELD && isUfCode(map.QUOTE_ODOMETER_KM_FIELD) && odoKm != null && !isNaN(Number(odoKm))) {
+    fields[map.QUOTE_ODOMETER_KM_FIELD.trim()] = Number(odoKm);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  ZDJĘCIA — pobieranie URL-i i upload jako plików do Bitrix24
+// ═══════════════════════════════════════════════════════════════════
+function base64FromBlob(blob) {
+  return new Promise(function (resolve, reject) {
+    var reader = new FileReader();
+    reader.onloadend = function () {
+      if (reader.result && typeof reader.result === 'string') {
+        var b64 = reader.result.split(',')[1] || reader.result;
+        resolve(b64);
+      } else {
+        reject(new Error('Nie udało się odczytać jako base64'));
+      }
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+function extFromContentType(ct) {
+  var m = (ct || '').split(';')[0].trim().toLowerCase();
+  if (m === 'image/jpeg' || m === 'image/jpg') return 'jpg';
+  if (m === 'image/png') return 'png';
+  if (m === 'image/webp') return 'webp';
+  if (m === 'image/gif') return 'gif';
+  return 'jpg';
+}
+
+async function uploadAuctionImagesAsFiles(imageUrls, ufFilesKey) {
+  if (!imageUrls || !imageUrls.length || !ufFilesKey) return false;
+  var max = Math.min(imageUrls.length, 10);
+  for (var i = 0; i < max; i++) {
+    try {
+      var resp = await fetch(imageUrls[i], { mode: 'cors', credentials: 'omit' });
+      if (!resp.ok) continue;
+      var blob = await resp.blob();
+      if (!blob.size) continue;
+      var b64 = await base64FromBlob(blob);
+      var ext = extFromContentType(blob.type);
+      var fileTuple = ['auction-' + (i + 1) + '.' + ext, b64];
+      var updateResult = await new Promise(function (resolve, reject) {
+        var f = {};
+        f[ufFilesKey] = fileTuple;
+        BX24.callMethod(
+          'crm.quote.update',
+          { id: quoteId, fields: f },
+          function (r) {
+            if (r.error()) reject(new Error(r.error().ex ? r.error().ex.error_description : 'update error'));
+            else resolve(r.data());
+          }
+        );
+      });
+      if (!updateResult || updateResult === false) continue;
+      return true;
+    } catch (e) {
+      console.warn('[frik] upload zdjęcia ' + i, e);
+    }
+  }
+  return false;
+}
+
+function addPhotosTimelineComment(imageUrls) {
+  if (!imageUrls || !imageUrls.length) return Promise.resolve();
+  function escHtmlAttr(s) {
+    return String(s).replace(/&/g, '&').replace(/"/g, '"').replace(/</g, '<');
+  }
+  var imgs = imageUrls.slice(0, 10).map(function (url) {
+    return '<img referrerpolicy="no-referrer" src="' + escHtmlAttr(url)
+      + '" style="max-width:220px;margin:3px;border-radius:4px;display:inline-block" alt="">';
+  }).join('');
+  var html = '<p><strong>Zdjęcia z aukcji (' + imageUrls.length + '):</strong></p>' + imgs;
+  return new Promise(function (resolve) {
+    BX24.callMethod(
+      'crm.timeline.comment.add',
+      { fields: { ENTITY_ID: quoteId, ENTITY_TYPE: 'quote', COMMENT: html } },
+      function () { resolve(); }
+    );
+  });
+}
 
 // ═══════════════════════════════════════════════════════════════════
 //  INIT
@@ -375,16 +550,13 @@ let currentAuctionUrl = null;
 BX24.init(function () {
   const info = BX24.placement.info();
   if (info && info.options) {
-    // CRM_QUOTE_DETAIL_TAB może zwracać ID pod różnymi kluczami
     quoteId = info.options.ID       || info.options.id       ||
               info.options.QUOTE_ID || info.options.quote_id ||
               info.options.ELEMENT_ID || info.options.element_id;
-    // debug — pokaż co przyszło jeśli nadal brak
     if (!quoteId) {
       console.warn('[frik] placement.info options:', JSON.stringify(info.options));
     }
   }
-  // allow Enter key in URL field
   document.getElementById('auctionUrl').addEventListener('keydown', function (e) {
     if (e.key === 'Enter') fetchData();
   });
@@ -412,7 +584,7 @@ async function fetchData() {
   currentAuctionUrl = urlVal;
   const siteName = host.includes('iaai') ? 'IAAI' : 'Copart';
 
-  showLoading(`Pobieram dane z ${siteName}…`);
+  showLoading('Pobieram dane z ' + siteName + '…');
 
   try {
     const resp = await fetch(CFG.SCRAPER_URL + '/api/scrape', {
@@ -427,10 +599,9 @@ async function fetchData() {
     const result = await resp.json();
 
     if (!resp.ok || !result.success) {
-      throw new Error(result.error || `Błąd serwera (${resp.status})`);
+      throw new Error(result.error || 'Błąd serwera (' + resp.status + ')');
     }
 
-    // Jeśli dane są całkowicie puste — traktuj jak blokadę
     const d = result.data;
     const isEmpty = !d.vin && !d.vehicleTitle && !d.year && !d.odometer && !d.primaryDamage;
     if (isEmpty) {
@@ -459,30 +630,27 @@ function showLoading(text) {
 function showPreview(data, source) {
   hide('loadingCard'); hide('errorCard');
 
-  // Title
   const title = data.vehicleTitle ||
     [data.year, data.make, data.model].filter(Boolean).join(' ') ||
     'Pojazd';
   byId('previewTitle').textContent = title;
 
-  // Badge
   const badge = byId('sourceBadge');
   badge.textContent = source;
   badge.className = 'badge ' + source.toLowerCase();
 
-  // Photos
   const gallery = byId('photoGallery');
   gallery.innerHTML = '';
   const photos = (data.images || []).slice(0, 10);
   if (photos.length > 0) {
     hide('noPhotos');
-    photos.forEach(url => {
+    photos.forEach(function (url) {
       const img = document.createElement('img');
       img.src = url;
       img.alt = title;
       img.title = 'Kliknij aby otworzyć';
-      img.onclick = () => window.open(url, '_blank');
-      img.onerror = () => { img.style.display = 'none'; };
+      img.onclick = function () { window.open(url, '_blank'); };
+      img.onerror = function () { img.style.display = 'none'; };
       gallery.appendChild(img);
     });
     show('photoGallery');
@@ -491,7 +659,6 @@ function showPreview(data, source) {
     hide('photoGallery');
   }
 
-  // Data grid
   const rows = [
     ['VIN',                  data.vin,           'vin'],
     ['Numer lotu',           data.lotNumber,     ''],
@@ -505,13 +672,11 @@ function showPreview(data, source) {
     ['Lokalizacja',          data.location,        ''],
     ['Data licytacji',       data.saleDate,        ''],
     ['Szacowana wartość',    data.estimatedValue ? '$' + fmtNum(data.estimatedValue) : null, ''],
-  ].filter(([, v]) => v != null && v !== '');
+  ].filter(function (r) { return r[1] != null && r[1] !== ''; });
 
-  byId('dataGrid').innerHTML = rows.map(([label, val, cls]) => `
-    <div class="drow">
-      <span class="dlabel">${esc(label)}</span>
-      <span class="dvalue ${cls}">${esc(String(val))}</span>
-    </div>`).join('');
+  byId('dataGrid').innerHTML = rows.map(function (r) {
+    return '<div class="drow"><span class="dlabel">' + esc(r[0]) + '</span><span class="dvalue ' + r[2] + '">' + esc(String(r[1])) + '</span></div>';
+  }).join('');
 
   hide('inputCard');
   show('previewCard');
@@ -520,9 +685,9 @@ function showPreview(data, source) {
 function showError(message, siteName) {
   hide('loadingCard'); hide('previewCard');
 
-  byId('errorTitle').textContent  = `Nie udało się pobrać danych z ${siteName || 'aukcji'}`;
+  byId('errorTitle').textContent = 'Nie udało się pobrać danych z ' + (siteName || 'aukcji');
   byId('errorDetail').textContent = message;
-  byId('openUrlBtn').onclick = () => currentAuctionUrl && window.open(currentAuctionUrl, '_blank');
+  byId('openUrlBtn').onclick = function () { if (currentAuctionUrl) window.open(currentAuctionUrl, '_blank'); };
   if (!currentAuctionUrl) byId('openUrlBtn').style.display = 'none';
   else byId('openUrlBtn').style.display = '';
 
@@ -533,7 +698,7 @@ function showError(message, siteName) {
 function resetForm() {
   currentData = currentSource = currentAuctionUrl = null;
   byId('auctionUrl').value = '';
-  byId('pdfInput').value   = '';
+  byId('pdfInput').value = '';
   byId('inputHint').textContent = 'Wklej link do wybranego auta, a system automatycznie pobierze wszystkie informacje.';
   byId('inputHint').className = 'hint';
   byId('pdfStatus').style.display = 'none';
@@ -542,12 +707,11 @@ function resetForm() {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  ZAPIS DO OFERTY (crm.quote.update)
+//  ZAPIS DO OFERTY (crm.quote.update) — ASYNC z mapowaniem UF + zdjęcia
 // ═══════════════════════════════════════════════════════════════════
-function saveToQuote() {
+async function saveToQuote() {
   if (!currentData) return;
   if (!quoteId) {
-    // Pokaż debugowe info żeby wiedzieć jak naprawić
     const info = BX24.placement ? BX24.placement.info() : null;
     const optStr = info ? JSON.stringify(info.options || {}) : 'BX24 niedostępne';
     setSaveStatus('Brak ID oferty. Info: ' + optStr, 'error');
@@ -557,69 +721,101 @@ function saveToQuote() {
   byId('saveBtn').disabled = true;
   setSaveStatus('Zapisuję…', 'loading');
 
-  const d      = currentData;
+  const d = currentData;
   const source = currentSource;
+  const cur = d.currency || 'USD';
 
-  // Build title
   const title = d.vehicleTitle ||
     [d.year, d.make, d.model].filter(Boolean).join(' ') ||
     'Auto z aukcji';
 
-  // Build formatted notes (goes into COMMENTS field)
+  // Pobierz mapowanie pól UF (XML_ID → FIELD_NAME)
+  try {
+    setSaveStatus('Pobieram mapę pól…', 'loading');
+    await loadQuoteUfMap();
+  } catch (e) {
+    console.warn('[frik] Nie udało się pobrać mapy pól UF:', e);
+  }
+
+  // Komentarz podsumowujący (czytelny dla człowieka)
   const lines = [
-    `=== Dane pojazdu z ${source} ===`,
-    d.vin         ? `VIN: ${d.vin}`                             : null,
-    d.lotNumber   ? `Lot: ${d.lotNumber}`                       : null,
+    '=== Dane pojazdu z ' + source + ' ===',
+    d.vin         ? 'VIN: ' + d.vin                      : null,
+    d.lotNumber   ? 'Lot: ' + d.lotNumber                : null,
     '',
-    d.year        ? `Rok: ${d.year}`                            : null,
-    d.make        ? `Marka: ${d.make}`                          : null,
-    d.model       ? `Model: ${d.model}`                         : null,
-    d.odometer    ? `Przebieg: ${fmtOdo(d.odometer)}`           : null,
+    d.year        ? 'Rok: ' + d.year                     : null,
+    d.make        ? 'Marka: ' + d.make                   : null,
+    d.model       ? 'Model: ' + d.model                  : null,
+    d.odometer    ? 'Przebieg: ' + fmtOdo(d.odometer)    : null,
+    d.odometerKm  ? 'Przebieg km: ' + fmtNum(d.odometerKm) + ' km' : null,
     '',
-    d.primaryDamage   ? `Uszkodzenie główne: ${d.primaryDamage}`     : null,
-    d.secondaryDamage ? `Uszkodzenie dodatkowe: ${d.secondaryDamage}` : null,
-    d.runDrive    ? `Czy jeździ: ${d.runDrive}`                 : null,
+    d.primaryDamage   ? 'Uszkodzenie główne: ' + d.primaryDamage     : null,
+    d.secondaryDamage ? 'Uszkodzenie dodatkowe: ' + d.secondaryDamage : null,
+    d.runDrive    ? 'Czy jeździ: ' + d.runDrive          : null,
     '',
-    d.location    ? `Lokalizacja: ${d.location}`                : null,
-    d.saleDate    ? `Data licytacji: ${d.saleDate}`             : null,
-    d.estimatedValue ? `Szacowana wartość: $${fmtNum(d.estimatedValue)}` : null,
+    d.location    ? 'Lokalizacja: ' + d.location         : null,
+    d.saleDate    ? 'Data licytacji: ' + d.saleDate      : null,
+    d.estimatedValue ? 'Szacowana wartość: $' + fmtNum(d.estimatedValue) + ' ' + cur : null,
     '',
-    currentAuctionUrl ? `Link aukcji (wewnętrzny): ${currentAuctionUrl}` : null,
-  ].filter(Boolean);
+    currentAuctionUrl ? 'Link aukcji: ' + currentAuctionUrl : null,
+    d.images && d.images.length ? 'Liczba zdjęć: ' + d.images.length : null,
+  ].filter(function (x) { return x !== null; });
 
   const fields = {
-    TITLE:    title,
-    COMMENTS: lines.join('\n'),
+    TITLE:       title,
+    COMMENTS:    lines.join('\n'),
+    CURRENCY_ID: cur,
   };
 
-  function escAttr(s) {
-    return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
-  }
-  if (CFG.QUOTE_AUCTION_PHOTOS_UF && d.images && d.images.length > 0) {
-    const imgs = d.images.slice(0, 10).map(function (url) {
-      return '<img referrerpolicy="no-referrer" src="' + escAttr(url)
-        + '" style="max-width:220px;margin:3px;border-radius:4px;display:inline-block" alt="">';
-    }).join('');
-    fields[CFG.QUOTE_AUCTION_PHOTOS_UF] =
-      '<p><strong>Zdjęcia z aukcji (' + d.images.length + '):</strong></p>' + imgs;
-  }
+  // Ustaw indywidualne pola UF (VIN, rok, marka, model itd.)
+  applyQuoteAuctionUfs(fields, d);
 
   if (d.estimatedValue) {
-    fields['OPPORTUNITY']              = d.estimatedValue;
-    fields['CURRENCY_ID']              = 'USD';
-    fields[CFG.QUOTE_EST_PRICE_FIELD]  = { VALUE: String(d.estimatedValue), CURRENCY: 'USD' };
+    fields['OPPORTUNITY'] = d.estimatedValue;
+    fields[CFG.QUOTE_EST_PRICE_FIELD] = { VALUE: String(d.estimatedValue), CURRENCY: cur };
   }
   if (source === 'IAAI')   fields[CFG.QUOTE_SOURCE_FIELD] = CFG.SOURCE_ENUM_IAAI;
   if (source === 'Copart') fields[CFG.QUOTE_SOURCE_FIELD] = CFG.SOURCE_ENUM_COPART;
 
-  BX24.callMethod('crm.quote.update', { id: quoteId, fields }, function (result) {
-    byId('saveBtn').disabled = false;
+  BX24.callMethod('crm.quote.update', { id: quoteId, fields }, async function (result) {
     if (result.error()) {
+      byId('saveBtn').disabled = false;
       const msg = result.error().ex ? result.error().ex.error_description : String(result.error());
       setSaveStatus('Błąd: ' + msg, 'error');
-    } else {
-      showSavedConfirmation(title);
+      return;
     }
+
+    setSaveStatus('Zapisano dane — przesyłam zdjęcia…', 'loading');
+
+    if (d.images && d.images.length > 0) {
+      const photoLibField = cachedUfFieldMap && cachedUfFieldMap.QUOTE_PHOTO_LIBRARY_FIELD;
+      if (photoLibField && isUfCode(photoLibField)) {
+        try {
+          const uploaded = await uploadAuctionImagesAsFiles(d.images, photoLibField.trim());
+          if (uploaded) {
+            setSaveStatus('✓ Dane i zdjęcia zapisane', 'success');
+            showSavedConfirmation(title);
+            byId('saveBtn').disabled = false;
+            return;
+          }
+        } catch (e) {
+          console.warn('[frik] Upload zdjęć nieudany:', e);
+        }
+      }
+
+      // Fallback: komentarz timeline z hotlinkami
+      try {
+        await addPhotosTimelineComment(d.images);
+        setSaveStatus('✓ Dane zapisane (zdjęcia w komentarzu)', 'success');
+      } catch (e) {
+        setSaveStatus('✓ Dane zapisane (zdjęcia pominięte)', 'warning');
+      }
+    } else {
+      setSaveStatus('✓ Dane zapisane', 'success');
+    }
+
+    showSavedConfirmation(title);
+    byId('saveBtn').disabled = false;
   });
 }
 
@@ -660,7 +856,6 @@ async function handlePdfFile(file) {
     const text = await extractTextFromPdf(buf);
     const data = parseVehicleFromText(text);
 
-    // Detect source from known URL (if user pasted it first)
     if (!currentSource && currentAuctionUrl) {
       currentSource = currentAuctionUrl.includes('iaai') ? 'IAAI' : 'Copart';
     }
@@ -678,10 +873,9 @@ async function handlePdfFile(file) {
 function setPdfStatus(text, type) {
   const el = byId('pdfStatus');
   el.style.display = 'block';
-  el.innerHTML = `<span class="status-chip ${type}">${esc(text)}</span>`;
+  el.innerHTML = '<span class="status-chip ' + type + '">' + esc(text) + '</span>';
 }
 
-// pdf.js text extraction
 async function extractTextFromPdf(arrayBuffer) {
   pdfjsLib.GlobalWorkerOptions.workerSrc =
     'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -690,7 +884,7 @@ async function extractTextFromPdf(arrayBuffer) {
   for (let i = 1; i <= Math.min(pdf.numPages, 6); i++) {
     const page    = await pdf.getPage(i);
     const content = await page.getTextContent();
-    text += content.items.map(item => item.str).join(' ') + '\n';
+    text += content.items.map(function (item) { return item.str; }).join(' ') + '\n';
   }
   return text;
 }
@@ -703,9 +897,8 @@ function parseVehicleFromText(text) {
 
   const vin = grab(/\b([A-HJ-NPR-Z0-9]{17})\b/);
 
-  // Year: 1980–2030
   const yearRaw = grab(/\b(19[89]\d|20[0-3]\d)\b/);
-  const year    = yearRaw ? parseInt(yearRaw, 10) : null;
+  const year = yearRaw ? parseInt(yearRaw, 10) : null;
 
   const primaryDamage   = grab(/Primary Damage[:\s]+([^\n]+)/i);
   const secondaryDamage = grab(/Secondary Damage[:\s]+([^\n]+)/i);
@@ -722,10 +915,9 @@ function parseVehicleFromText(text) {
   const sdM      = text.match(/Sale Date[:\s]+([^\n]+)/i);
   const saleDate = sdM ? sdM[1].trim() : null;
 
-  const estM         = text.match(/Estimated(?:\s+Retail)?\s+Value[:\s$]*([\d,]+)/i);
+  const estM     = text.match(/Estimated(?:\s+Retail)?\s+Value[:\s$]*([\d,]+)/i);
   const estimatedValue = estM ? parseInt(estM[1].replace(/,/g, ''), 10) : null;
 
-  // Lot from URL if pasted before, otherwise from text
   let lotNumber = null;
   if (currentAuctionUrl) {
     const lu = currentAuctionUrl.match(/\/lot\/([0-9]+)/);
@@ -737,22 +929,23 @@ function parseVehicleFromText(text) {
   }
 
   return {
-    vehicleTitle: null, year, make: null, model: null, vin, lotNumber,
-    primaryDamage, secondaryDamage, odometer, runDrive,
-    saleDate, location, estimatedValue, images: [],
+    vehicleTitle: null, year: year, make: null, model: null, vin: vin, lotNumber: lotNumber,
+    primaryDamage: primaryDamage, secondaryDamage: secondaryDamage, odometer: odometer,
+    runDrive: runDrive, saleDate: saleDate, location: location,
+    estimatedValue: estimatedValue, images: [],
   };
 }
 
 // ═══════════════════════════════════════════════════════════════════
 //  HELPERS
 // ═══════════════════════════════════════════════════════════════════
-function byId(id)         { return document.getElementById(id); }
-function show(id)         { const el = byId(id); if (el) el.style.display = ''; }
-function hide(id)         { const el = byId(id); if (el) el.style.display = 'none'; }
-function esc(s)           { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-function fmtNum(n)        { return Number(n).toLocaleString('pl-PL'); }
-function fmtOdo(n)        { return fmtNum(n) + ' mil'; }
-function setHint(t, err)  {
+function byId(id)     { return document.getElementById(id); }
+function show(id)     { const el = byId(id); if (el) el.style.display = ''; }
+function hide(id)     { const el = byId(id); if (el) el.style.display = 'none'; }
+function esc(s)       { return s.replace(/&/g,'&').replace(/</g,'<').replace(/>/g,'>').replace(/"/g,'"'); }
+function fmtNum(n)    { return Number(n).toLocaleString('pl-PL'); }
+function fmtOdo(n)    { return fmtNum(n) + ' mil'; }
+function setHint(t, err) {
   const el = byId('inputHint');
   el.textContent = t;
   el.className = 'hint' + (err ? ' err' : '');

@@ -368,6 +368,16 @@ const CFG = {
     QUOTE_ODOMETER_KM_FIELD:       'FRIK_AUCTION_ODOMETER_KM',
     QUOTE_PHOTO_LIBRARY_FIELD:     'FRIK_QUOTE_BIBLIOTEKA_ZDJEC',
   },
+  // Hardcoded fallback — znane kody UF pól z platformy (constants.ts QUOTE_FIELDS).
+  // Używane gdy XML_ID lookup nie zwróci wyniku.
+  UF_FALLBACKS: {
+    QUOTE_MAKE_FIELD:              'UF_CRM_68591DC7DCBEC',
+    QUOTE_MODEL_FIELD:             'UF_CRM_68591DC87F451',
+    QUOTE_YEAR_FIELD:              'UF_CRM_QUOTE_1774602640532',
+    QUOTE_ODOMETER_KM_FIELD:       'UF_CRM_68591DC867528',
+    QUOTE_AUCTION_URL_FIELD:       'UF_CRM_68591DC914981',
+    QUOTE_PHOTO_LIBRARY_FIELD:     'UF_CRM_QUOTE_1768237846545',
+  },
 };
 
 // ═══════════════════════════════════════════════════════════════════
@@ -426,6 +436,18 @@ async function loadQuoteUfMap() {
       console.warn('[frik] Nie znaleziono UF dla XML_ID=' + xmlId, e);
     }
   }
+
+  // Fallback: jeśli XML_ID lookup nie znalazł pola, użyj hardcoded kodów z platformy
+  var fallbacks = CFG.UF_FALLBACKS || {};
+  var fbKeys = Object.keys(fallbacks);
+  for (var j = 0; j < fbKeys.length; j++) {
+    var fbKey = fbKeys[j];
+    if (!map[fbKey] && fallbacks[fbKey]) {
+      map[fbKey] = fallbacks[fbKey];
+      console.info('[frik] Fallback UF: ' + fbKey + ' → ' + fallbacks[fbKey]);
+    }
+  }
+
   cachedUfFieldMap = map;
   return map;
 }

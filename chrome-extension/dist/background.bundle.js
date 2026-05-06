@@ -51,7 +51,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const ct = (res.headers.get('content-type') || 'image/jpeg').split(';')[0].trim();
     const buf = await res.arrayBuffer();
-    const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+    const bytes = new Uint8Array(buf);
+    let b64 = '';
+    const chunk = 8192;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      b64 += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+    }
+    b64 = btoa(b64);
     sendResponse({
       base64: b64,
       contentType: ct

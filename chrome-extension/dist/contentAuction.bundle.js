@@ -1045,22 +1045,29 @@
    * Pobiera pierwsze działające zdjęcie z URL-i aukcji i zapisuje jako plik w polu UF (nie hotlink).
    * Zwraca true przy sukcesie crm.quote.update.
    */
+  function fetchImageViaBackground(url) {
+    return new Promise(resolve => {
+      chrome.runtime.sendMessage({
+        type: 'FETCH_IMAGE_BASE64',
+        url
+      }, resp => {
+        if (chrome.runtime.lastError || !resp || resp.error) {
+          resolve(null);
+        } else {
+          resolve(resp);
+        }
+      });
+    });
+  }
   async function uploadAuctionImagesAsBitrixFiles(quoteId, imageUrls, whBase, ufKey) {
     if (!imageUrls || !imageUrls.length || !ufKey) return false;
     const max = Math.min(imageUrls.length, 10);
     for (let i = 0; i < max; i++) {
       try {
-        const r = await fetch(imageUrls[i], {
-          mode: 'cors',
-          credentials: 'omit',
-          referrerPolicy: 'no-referrer'
-        });
-        if (!r.ok) continue;
-        const blob = await r.blob();
-        if (!blob.size) continue;
-        const b64 = await blobToBase64Raw(blob);
-        const ext = extFromMime(blob.type);
-        const fileTuple = ['auction-' + (i + 1) + '.' + ext, b64];
+        const imgData = await fetchImageViaBackground(imageUrls[i]);
+        if (!imgData) continue;
+        const ext = extFromMime(imgData.contentType);
+        const fileTuple = ['auction-' + (i + 1) + '.' + ext, imgData.base64];
         const resp = await fetch(whBase + '/crm.quote.update.json', {
           method: 'POST',
           headers: {
@@ -1081,7 +1088,14 @@
           continue;
         }
         if (resp.ok && !json.error && json.result !== false) {
-          await maybePortalThumbnailIngest(quoteId, blob);
+          // Portal CDN — konwertuj base64 → Blob do maybePortalThumbnailIngest
+          try {
+            const byteArr = Uint8Array.from(atob(imgData.base64), c => c.charCodeAt(0));
+            const blob = new Blob([byteArr], {
+              type: imgData.contentType
+            });
+            await maybePortalThumbnailIngest(quoteId, blob);
+          } catch (_) {}
           return true;
         }
       } catch (e) {
@@ -1228,7 +1242,8 @@
     return null;
   }
   function applyQuoteAuctionUfs(fields, data, map) {
-    console.log('[MrFrik][DEBUG] qMap:', JSON.stringify(map));
+    console.log('[MrFrik][DEBUG] applyQuoteAuctionUfs map:', JSON.stringify(map));
+    console.log('[MrFrik][DEBUG] applyQuoteAuctionUfs data keys:', Object.keys(data).join(', '));
     const cur = data.currency || 'USD';
     if (map.QUOTE_EST_PRICE_FIELD && isUfCode(map.QUOTE_EST_PRICE_FIELD) && data.estimatedValue != null && data.estimatedValue !== '') {
       fields[map.QUOTE_EST_PRICE_FIELD.trim()] = {
@@ -1267,7 +1282,7 @@
     if (map.QUOTE_ODOMETER_KM_FIELD && isUfCode(map.QUOTE_ODOMETER_KM_FIELD) && odoKm != null && !isNaN(Number(odoKm))) {
       fields[map.QUOTE_ODOMETER_KM_FIELD.trim()] = Number(odoKm);
     }
-    console.log('[MrFrik][DEBUG] fields after apply:', JSON.stringify(fields));
+    console.log('[MrFrik][DEBUG] applyQuoteAuctionUfs result fields:', JSON.stringify(fields));
   }
   async function loadQuoteFieldMap(wh) {
     if (cachedQuoteFieldMap) return cachedQuoteFieldMap;

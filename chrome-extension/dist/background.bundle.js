@@ -32,6 +32,35 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.runtime.onStartup.addListener(() => {
   seedDefaultWebhookIfEmpty();
 });
+
+// Pobieranie zdjęć przez background (omija CORS content-script)
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg.type !== 'FETCH_IMAGE_BASE64') return false;
+  const url = msg.url;
+  if (!url || typeof url !== 'string') {
+    sendResponse({
+      error: 'brak url'
+    });
+    return false;
+  }
+  fetch(url, {
+    headers: {
+      Accept: 'image/*'
+    }
+  }).then(async res => {
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const ct = (res.headers.get('content-type') || 'image/jpeg').split(';')[0].trim();
+    const buf = await res.arrayBuffer();
+    const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+    sendResponse({
+      base64: b64,
+      contentType: ct
+    });
+  }).catch(e => sendResponse({
+    error: String(e)
+  }));
+  return true; // async response
+});
 /******/ })()
 ;
 //# sourceMappingURL=background.bundle.js.map

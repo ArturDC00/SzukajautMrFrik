@@ -1228,6 +1228,7 @@
     return null;
   }
   function applyQuoteAuctionUfs(fields, data, map) {
+    console.log('[MrFrik][DEBUG] qMap:', JSON.stringify(map));
     const cur = data.currency || 'USD';
     if (map.QUOTE_EST_PRICE_FIELD && isUfCode(map.QUOTE_EST_PRICE_FIELD) && data.estimatedValue != null && data.estimatedValue !== '') {
       fields[map.QUOTE_EST_PRICE_FIELD.trim()] = {
@@ -1266,6 +1267,7 @@
     if (map.QUOTE_ODOMETER_KM_FIELD && isUfCode(map.QUOTE_ODOMETER_KM_FIELD) && odoKm != null && !isNaN(Number(odoKm))) {
       fields[map.QUOTE_ODOMETER_KM_FIELD.trim()] = Number(odoKm);
     }
+    console.log('[MrFrik][DEBUG] fields after apply:', JSON.stringify(fields));
   }
   async function loadQuoteFieldMap(wh) {
     if (cachedQuoteFieldMap) return cachedQuoteFieldMap;

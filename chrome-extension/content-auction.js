@@ -1026,6 +1026,8 @@
   }
 
   function applyQuoteAuctionUfs(fields, data, map) {
+    console.log('[MrFrik][DEBUG] applyQuoteAuctionUfs map:', JSON.stringify(map));
+    console.log('[MrFrik][DEBUG] applyQuoteAuctionUfs data keys:', Object.keys(data).join(', '));
     const cur = data.currency || 'USD';
 
     if (map.QUOTE_EST_PRICE_FIELD && isUfCode(map.QUOTE_EST_PRICE_FIELD)
@@ -1072,6 +1074,7 @@
       && odoKm != null && !isNaN(Number(odoKm))) {
       fields[map.QUOTE_ODOMETER_KM_FIELD.trim()] = Number(odoKm);
     }
+    console.log('[MrFrik][DEBUG] applyQuoteAuctionUfs result fields:', JSON.stringify(fields));
   }
 
   async function loadQuoteFieldMap(wh) {

@@ -1062,45 +1062,39 @@
   async function uploadAuctionImagesAsBitrixFiles(quoteId, imageUrls, whBase, ufKey) {
     if (!imageUrls || !imageUrls.length || !ufKey) return false;
     const max = Math.min(imageUrls.length, 10);
-    for (let i = 0; i < max; i++) {
-      try {
-        const imgData = await fetchImageViaBackground(imageUrls[i]);
-        if (!imgData) continue;
-        const ext = extFromMime(imgData.contentType);
-        const fileTuple = ['auction-' + (i + 1) + '.' + ext, imgData.base64];
-        const resp = await fetch(whBase + '/crm.quote.update.json', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            id: quoteId,
-            fields: {
-              [ufKey]: fileTuple
-            }
-          })
-        });
-        const raw = await resp.text();
-        let json;
+
+    // Pobierz wszystkie zdjęcia równolegle
+    const results = await Promise.all(
+      imageUrls.slice(0, max).map((url, i) => fetchImageViaBackground(url).then(d => ({ i, d })))
+    );
+    const images = results.filter(r => r.d !== null);
+    if (!images.length) return false;
+
+    // Wyślij wszystkie w jednym crm.quote.update
+    const fd = new FormData();
+    fd.append('id', String(quoteId));
+    images.forEach(({ i, d }) => {
+      const ext = extFromMime(d.contentType);
+      fd.append('fields[' + ufKey + '][' + i + '][fileData][0]', 'auction-' + (i + 1) + '.' + ext);
+      fd.append('fields[' + ufKey + '][' + i + '][fileData][1]', d.base64);
+    });
+
+    try {
+      const resp = await fetch(whBase + '/crm.quote.update', { method: 'POST', body: fd });
+      const json = await resp.json().catch(() => ({}));
+      console.log('[MrFrik][DEBUG] gallery upload quoteId=' + quoteId + ' count=' + images.length + ' result=' + JSON.stringify(json).slice(0, 200));
+      if (resp.ok && !json.error && json.result !== false) {
+        // Portal CDN — pierwsza miniaturka
         try {
-          json = JSON.parse(raw);
-        } catch (_) {
-          continue;
-        }
-        if (resp.ok && !json.error && json.result !== false) {
-          // Portal CDN — konwertuj base64 → Blob do maybePortalThumbnailIngest
-          try {
-            const byteArr = Uint8Array.from(atob(imgData.base64), c => c.charCodeAt(0));
-            const blob = new Blob([byteArr], {
-              type: imgData.contentType
-            });
-            await maybePortalThumbnailIngest(quoteId, blob);
-          } catch (_) {}
-          return true;
-        }
-      } catch (e) {
-        console.warn('[MrFrik] upload zdjęcia z aukcji', i, e);
+          const first = images[0].d;
+          const byteArr = Uint8Array.from(atob(first.base64), c => c.charCodeAt(0));
+          const blob = new Blob([byteArr], { type: first.contentType });
+          await maybePortalThumbnailIngest(quoteId, blob);
+        } catch (_) {}
+        return true;
       }
+    } catch (e) {
+      console.warn('[MrFrik] upload galerii z aukcji', e);
     }
     return false;
   }
@@ -1290,6 +1284,8 @@
     try {
       const r = await fetch(chrome.runtime.getURL('bitrix-quote-fields.json'));
       base = await r.json();
+      // Wymuś poprawny kod galerii (MULTIPLE:Y) — xml_cache może zwracać błędne UF_CRM_QUOTE_BIBLIOTEKA_ZDJEC
+      base['QUOTE_PHOTO_LIBRARY_FIELD'] = 'UF_CRM_QUOTE_1768237846545';
     } catch (_) {
       base = {};
     }
